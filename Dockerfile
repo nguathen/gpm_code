@@ -30,7 +30,7 @@ WORKDIR /var/www/html
 COPY . .
 
 COPY php_large_file_upload.ini /usr/local/etc/php/conf.d
-COPY env.docker.example /var/www/html/.env
+# COPY env.docker.example /var/www/html/.env
 # COPY env.docker.example /var/www/html/abc
 # COPY env.docker.example /usr/local/etc/php/conf.d/ngon
 # COPY env.docker.example /usr/local/etc/php/conf.d/.env

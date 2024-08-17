@@ -5,10 +5,16 @@ composer install
 php artisan serve --port=8081
 ```
 
-## Docker
+## Docker build test
 ```
 docker-compose build --no-cache
 docker-compose up -d
+```
+
+## Docker publish
+```
+docker build -t ngochoaitn/gpm-login-private-server:beta-test .
+docker push ngochoaitn/gpm-login-private-server:beta-test 
 ```
 
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400"></a></p>
