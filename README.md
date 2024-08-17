@@ -14,6 +14,7 @@ docker-compose up -d
 ## Docker by sail
 ```
 docker compose down -v
+./vendor/bin/sail build --no-cache
 ./vendor/bin/sail up
 ```
 
