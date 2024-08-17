@@ -11,6 +11,12 @@ docker-compose build --no-cache
 docker-compose up -d
 ```
 
+## Docker by sail
+```
+docker compose down -v
+./vendor/bin/sail up
+```
+
 ## Docker publish
 ```
 docker build -t ngochoaitn/gpm-login-private-server:beta-test .
