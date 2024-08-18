@@ -48,6 +48,17 @@ services:
                 - '-p${DB_PASSWORD}'
             retries: 3
             timeout: 5s
+    phpmyadmin:
+        image: phpmyadmin/phpmyadmin:latest
+        ports:
+            - "8081:80"
+        environment:
+            - PMA_HOSTS=mysql
+            - PMA_PORT=3306
+            - PMA_USER=sail
+            - PMA_PASSWORD=password
+        networks:
+            - sail
 networks:
     sail:
         driver: bridge
