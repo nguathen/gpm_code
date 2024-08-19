@@ -18,7 +18,7 @@ class HomeController extends Controller
             
             return view("ready");
         } catch (\Exception $ex) {
-            return redirect('/setup');
+            return redirect('/setup'); // TODO: tạo view setup cho nhập các thông tin
         }
     }
 
@@ -110,5 +110,9 @@ class HomeController extends Controller
         $fp = fopen($envFile, 'w');
         fwrite($fp, $str);
         fclose($fp);
+    }
+
+    public function test(){
+        return 'ok';
     }
 }

@@ -18,6 +18,10 @@ use App\Http\Controllers\AdminController;
 Route::get('/', [HomeController::class, 'index']);
 Route::get('/setup', [HomeController::class, 'setup']);
 Route::post('/setup', [HomeController::class, 'createDb']);
+Route::get('/test', [HomeController::class, 'test']);
+Route::get('/test', function(){
+    return 'test';
+});
 
 Route::get('/admin/auth', function(){
     return view('login');

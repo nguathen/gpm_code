@@ -22,6 +22,9 @@ docker compose down -v
 ```
 docker build -t ngochoaitn/gpm-login-private-server:beta-test .
 docker push ngochoaitn/gpm-login-private-server:beta-test 
+
+docker buildx create --name mybuilder --use --driver docker-container
+docker buildx inspect --bootstrap
 docker buildx build --platform linux/amd64,linux/arm64 -t ngochoaitn/gpm-login-private-server:beta-test --push .
 ```
 

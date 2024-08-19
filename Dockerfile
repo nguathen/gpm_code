@@ -1,8 +1,9 @@
 FROM ubuntu:22.04
-
-LABEL maintainer="Taylor Otwell"
+LABEL maintainer="giaiphapmmo.vn"
 
 ARG WWWGROUP=1000
+ARG WWWUSER=1000
+
 ARG NODE_VERSION=20
 ARG MYSQL_CLIENT="mysql-client"
 ARG POSTGRES_VERSION=15
@@ -65,6 +66,7 @@ RUN apt-get update \
     && curl -sLS https://getcomposer.org/installer | php -- --install-dir=/usr/bin/ --filename=composer \
     && apt-get -y autoremove \
     && apt-get clean \
+    && apt-get install -y $MYSQL_CLIENT \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 RUN setcap "cap_net_bind_service=+ep" /usr/bin/php8.3
