@@ -22,8 +22,27 @@ class AdminController extends Controller
 
         $storageType = 's3';
         $setting = Setting::where('name', 'storage_type')->first();
-        if ($setting != null)
-            $storageType = $setting->value;
+        
+        // Tạo setting nếu chưa có dựa trên thông tin trong file .env
+        if($setting == null) {
+            $setting = new Setting();
+            $setting->name = 'storage_type';
+
+            $apiKey = env('S3_KEY');
+            $apiSecret = env('S3_PASSWORD');
+            $apiBucket = env('S3_BUCKET');
+            $apiRegion = env('S3_REGION');
+            
+            if($apiKey != null && $apiSecret != null && $apiBucket != null && $apiRegion != null) {
+                $setting->value = 's3';
+            } else {
+                $setting->value = 'hosting';
+            }
+            $setting->save();
+        }
+
+        $storageType = $setting->value;
+
         $s3Config = new stdClass();
         $s3Config->S3_KEY = env('S3_KEY');
         $s3Config->S3_PASSWORD = env('S3_PASSWORD');
