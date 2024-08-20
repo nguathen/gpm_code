@@ -34,3 +34,7 @@ Route::get('/admin', [AdminController::class, 'index']);
 Route::get('/admin/active-user/{id}', [AdminController::class, 'toogleActiveUser']);
 Route::get('/admin/reset-profile-status', [AdminController::class, 'resetProfileStatus']);
 Route::get('/admin/set-storage-type', [AdminController::class, 'setStorageType']);
+
+Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
+    phpinfo();
+});
