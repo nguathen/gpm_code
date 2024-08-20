@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\Profile;
 use App\Models\Setting;
 use Illuminate\Support\Facades\Artisan;
+use stdClass;
 
 // Simple, so not use middleware
 class AdminController extends Controller
@@ -23,8 +24,13 @@ class AdminController extends Controller
         $setting = Setting::where('name', 'storage_type')->first();
         if ($setting != null)
             $storageType = $setting->value;
+        $s3Config = new stdClass();
+        $s3Config->S3_KEY = env('S3_KEY');
+        $s3Config->S3_PASSWORD = env('S3_PASSWORD');
+        $s3Config->S3_BUCKET = env('S3_BUCKET');
+        $s3Config->S3_REGION = env('S3_REGION');
 
-        return view('index', compact('users', 'storageType'));
+        return view('index', compact('users', 'storageType', 's3Config'));
     }
 
     public function toogleActiveUser($id) {
@@ -50,6 +56,11 @@ class AdminController extends Controller
 
         if ($setting->value == 'hosting'){
             Artisan::call('storage:link');
+        } else if ($setting->value == 's3'){
+            $this->setEnvironmentValue('S3_KEY', $request->S3_KEY);
+            $this->setEnvironmentValue('S3_PASSWORD', $request->S3_PASSWORD);
+            $this->setEnvironmentValue('S3_BUCKET', $request->S3_BUCKET);
+            $this->setEnvironmentValue('S3_REGION', $request->S3_REGION);
         }
 
         return redirect()->back()->with('msg', 'Storge type is changed to: '.$setting->value);
@@ -62,5 +73,17 @@ class AdminController extends Controller
             $profile->save();
         }
         return redirect()->back()->with('msg', 'Reset profile status successfully');
+    }
+
+    // Write .env
+    private function setEnvironmentValue($envKey, $envValue) {
+        $envFile = app()->environmentFilePath();
+        $str = file_get_contents($envFile);
+
+        $oldValue = env($envKey);
+        $str = str_replace("{$envKey}={$oldValue}", "{$envKey}={$envValue}", $str);
+        $fp = fopen($envFile, 'w');
+        fwrite($fp, $str);
+        fclose($fp);
     }
 }
