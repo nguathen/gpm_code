@@ -79,6 +79,10 @@ RUN chmod +x /usr/local/bin/start-container
 
 COPY . /var/www/html
 
+RUN rm -rf public/storage
+RUN php artisan storage:link
+RUN chmod -Rf 777 ./storage
+
 EXPOSE 80/tcp
 
 ENTRYPOINT ["start-container"]
