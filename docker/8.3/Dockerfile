@@ -82,6 +82,7 @@ COPY . /var/www/html
 RUN rm -rf public/storage
 RUN php artisan storage:link
 RUN chmod -Rf 777 ./storage
+RUN chmod 777 /var/www/html/.env
 
 EXPOSE 80/tcp
 
