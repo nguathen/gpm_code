@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\BaseController;
 use Illuminate\Http\Request;
 use App\Models\Group;
+use App\Models\GroupRole;
+use App\Models\User;
 
 class GroupController extends BaseController
 {
@@ -113,5 +115,57 @@ class GroupController extends BaseController
     {
         $total = Group::count();
         return $this->getJsonResponse(true, 'OK', ['total' => $total]);
+    }
+
+    /**
+     * Get list of users role
+     */
+    public function getGroupRoles($id)
+    {
+        $groupRoles = GroupRole::where('group_id', $id)
+                            ->with(['group', 'user'])->get();
+        return $this->getJsonResponse(true, 'OK', $groupRoles);
+    }
+
+    public function share($id, Request $request)
+    {
+        // Validate input
+        $user = $request->user();
+
+        $sharedUser = User::find($request->user_id);
+        if ($sharedUser == null)
+            return $this->getJsonResponse(false, 'User ID không tồn tại', null);
+
+        if ($sharedUser->role == 2)
+            return $this->getJsonResponse(false, 'Không cần set quyền cho Admin', null);
+
+        $group = Group::find($id);
+        if ($group == null)
+            return $this->getJsonResponse(false, 'Profile không tồn tại', null);
+
+        if ($user->role != 2 && $group->created_by != $user->id)
+            return $this->getJsonResponse(false, 'Bạn phải là người tạo group', null);
+
+        // Handing data
+        $groupRole = GroupRole::where('group_id', $id)->where('user_id', $request->user_id)->first();
+
+        // If role = 0, remove in GroupRole
+        if ($request->role == 0){
+            if ($groupRole != null)
+                $groupRole->delete();
+
+            return $this->getJsonResponse(true, 'OK', null);
+        }
+
+        if ($groupRole == null)
+            $groupRole = new GroupRole();
+
+        // Share
+        $groupRole->group_id = $id;
+        $groupRole->user_id = $request->user_id;
+        $groupRole->role = $request->role;
+        $groupRole->save();
+
+        return $this->getJsonResponse(true, 'OK', null);
     }
 }

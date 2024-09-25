@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\BaseController;
 use Illuminate\Http\Request;
 use App\Models\Profile;
 use App\Models\Group;
+use App\Models\GroupRole;
 use App\Models\ProfileRole;
 use App\Models\User;
 use Carbon\Carbon;
@@ -28,11 +29,21 @@ class ProfileController extends BaseController
 
         // If user isn't admin, show by role
         if ($user->role < 2){
-            $ids = DB::table('profiles')
-                ->join('profile_roles', 'profiles.id', '=', 'profile_roles.profile_id')
-                ->where('profile_roles.user_id', $user->id)
-                ->select('profiles.id')->get();
+            $ids_group_share = DB::table('group_roles')->where('user_id', $user->id)->pluck('group_id');
 
+            // $ids = DB::table('profiles')
+            //     ->join('profile_roles', 'profiles.id', '=', 'profile_roles.profile_id')
+            //     ->where('profile_roles.user_id', $user->id)
+            //     ->select('profiles.id')->get();
+
+            $ids = DB::table('profiles')
+            ->join('profile_roles', 'profiles.id', '=', 'profile_roles.profile_id')
+            ->where(function($query) use ($user, $ids_group_share) {
+                $query->where('profile_roles.user_id', $user->id)
+                      ->orWhereIn('profiles.group_id', $ids_group_share);
+            })
+            ->select('profiles.id')->get();
+            
             $arrIds = [];
             foreach ($ids as $id){
                 array_push($arrIds, $id->id);
@@ -339,9 +350,17 @@ class ProfileController extends BaseController
     {
         $canModify = true;
 
-        if ($logonUser->role < 2){
+        if ($logonUser->role < 2) {
             $profileRole = ProfileRole::where('user_id', $logonUser->id)->where('profile_id', $profileId)->first();
-            $canModify = ($profileRole->role == 2);
+            $canModify = $profileRole != null && $profileRole->role == 2;
+
+            if ($canModify == false){
+                $profile = Profile::find($profileId);
+                if($profile != null) {
+                    $groupRole = GroupRole::where('user_id', $logonUser->id)->where('group_id', $profile->group_id)->first();
+                    $canModify = $groupRole != null && $groupRole->role == 2;
+                }
+            }
         }
 
         return $canModify;
@@ -359,6 +378,14 @@ class ProfileController extends BaseController
         if ($logonUser->role < 2){
             $profileRole = ProfileRole::where('user_id', $logonUser->id)->where('profile_id', $profileId)->first();
             $canAccess = ($profileRole != null);
+
+            if ($canAccess == false){
+                $profile = Profile::find($profileId);
+                if($profile != null) {
+                    $groupRole = GroupRole::where('user_id', $logonUser->id)->where('group_id', $profile->group_id)->first();
+                    $canAccess = $groupRole != null;
+                }
+            }
         }
 
         return $canAccess;

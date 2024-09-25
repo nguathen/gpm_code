@@ -49,7 +49,8 @@ class AdminController extends Controller
         $s3Config->S3_BUCKET = env('S3_BUCKET');
         $s3Config->S3_REGION = env('S3_REGION');
 
-        return view('index', compact('users', 'storageType', 's3Config'));
+        $cache_extension_setting = Setting::where('name', 'cache_extension')->first()->value ?? "off";
+        return view('index', compact('users', 'storageType', 's3Config', 'cache_extension_setting'));
     }
 
     public function toogleActiveUser($id) {
@@ -64,7 +65,7 @@ class AdminController extends Controller
         return redirect()->back();
     }
 
-    public function setStorageType(Request $request){
+    public function saveSetting(Request $request){
         $setting = Setting::where('name', 'storage_type')->first();
         if ($setting == null)
             $setting = new Setting();
@@ -82,6 +83,13 @@ class AdminController extends Controller
             $this->setEnvironmentValue('S3_REGION', $request->S3_REGION);
         }
 
+        $cache_extension_setting = Setting::where('name', 'cache_extension')->first();
+        if ($cache_extension_setting == null)
+            $cache_extension_setting = new Setting();
+        $cache_extension_setting->name = 'cache_extension';
+        $cache_extension_setting->value = $request->cache_extension ?? "off";
+        $cache_extension_setting->save();
+
         return redirect()->back()->with('msg', 'Storge type is changed to: '.$setting->value);
     }
 
@@ -92,6 +100,20 @@ class AdminController extends Controller
             $profile->save();
         }
         return redirect()->back()->with('msg', 'Reset profile status successfully');
+    }
+
+    public function runMigrations() {
+        try {
+            // Chạy lệnh migrate qua Artisan
+            // Artisan::call('migrate');
+            UpdateController::migrationDatabase();
+            
+            // Trả về thông báo thành công
+            return redirect()->back()->with('msg', 'Migration successfully');
+        } catch (\Exception $e) {
+            // Trả về lỗi nếu quá trình migrate thất bại
+            return redirect()->back()->with('msg', 'Migration failed: '.$e->getMessage());
+        }
     }
 
     // Write .env

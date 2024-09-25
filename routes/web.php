@@ -4,6 +4,8 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\UpdateController;
+
 /*
 |--------------------------------------------------------------------------
 | Web Routes
@@ -33,8 +35,13 @@ Route::post('/admin/auth', [AuthController::class, 'login']);
 Route::get('/admin', [AdminController::class, 'index']);
 Route::get('/admin/active-user/{id}', [AdminController::class, 'toogleActiveUser']);
 Route::get('/admin/reset-profile-status', [AdminController::class, 'resetProfileStatus']);
-Route::get('/admin/set-storage-type', [AdminController::class, 'setStorageType']);
+Route::get('/admin/save-setting', [AdminController::class, 'saveSetting']);
+Route::get('/admin/migration', [AdminController::class, 'runMigrations']);
 
 Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
     phpinfo();
+});
+
+Route::middleware(['auth:sanctum'])->group(function(){
+    Route::get('/auto-update', [UpdateController::class, 'updateFromRemoteZip']);
 });

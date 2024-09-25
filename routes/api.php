@@ -32,6 +32,7 @@ Route::prefix('users')->group(function () {
 Route::get('settings/get-s3-api', [SettingController::class, 'getS3Setting']);
 Route::get('settings/get-storage-type', [SettingController::class, 'getStorageTypeSetting']);
 Route::get('settings/get-version', [SettingController::class, 'getPrivateServerVersion']); // 23.7.2024
+Route::get('settings/get-setting', [SettingController::class, 'getAllSetting']); // 24.9.2024
 
 
 Route::middleware(['auth:sanctum'])->group(function(){
@@ -47,6 +48,8 @@ Route::middleware(['auth:sanctum'])->group(function(){
         Route::post('/create', [GroupController::class, 'store']);
         Route::post('/update/{id}', [GroupController::class, 'update']);
         Route::get('/delete/{id}', [GroupController::class, 'destroy']);
+        Route::get('/share/{id}', [GroupController::class, 'share']);
+        Route::get('/roles/{id}', [GroupController::class, 'getGroupRoles']);
     });
 
     Route::prefix('profiles')->group(function () {
