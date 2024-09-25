@@ -25,7 +25,7 @@ docker push ngochoaitn/gpm-login-private-server:beta-test
 
 docker buildx create --name mybuilder --use --driver docker-container
 docker buildx inspect --bootstrap
-docker buildx build --platform linux/amd64,linux/arm64 -t ngochoaitn/gpm-login-private-server:beta-test --push .
+docker buildx build --platform linux/amd64,linux/arm64 -t ngochoaitn/gpm-login-private-server:latest --push .
 ```
 
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400"></a></p>
