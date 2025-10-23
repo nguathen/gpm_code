@@ -541,6 +541,24 @@ class ProfileController extends BaseController
     }
 
     /**
+     * Get list of proxies where ShortTitleIconOverlay contains ':'
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function getListProxy()
+    {
+        $profiles = Profile::whereRaw("JSON_EXTRACT(json_data, '$.ShortTitleIconOverlay') LIKE '%:%'")->get();
+        
+        $proxyList = $profiles->map(function($profile) {
+            $jsonData = is_string($profile->json_data) ? json_decode($profile->json_data, true) : $profile->json_data;
+            return $jsonData['Proxy'] . ':' . $jsonData['ShortTitleIconOverlay'];
+        });
+        
+        return $this->getJsonResponse(true, 'OK', $proxyList);
+    }
+
+    
+    /**
      * Check profile permisson
      *
      * @return bool $canModify

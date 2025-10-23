@@ -36,6 +36,7 @@ Route::get('settings/get-setting', [SettingController::class, 'getAllSetting']);
 
 // Public API - no auth required
 Route::get('profiles/count-open', [ProfileController::class, 'getOpenCount']);
+Route::get('profiles/list-proxy', [ProfileController::class, 'getListProxy']);
 
 
 Route::middleware(['auth:sanctum'])->group(function(){
