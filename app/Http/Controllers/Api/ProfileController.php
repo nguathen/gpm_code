@@ -551,7 +551,7 @@ class ProfileController extends BaseController
         
         $proxyList = $profiles->map(function($profile) {
             $jsonData = is_string($profile->json_data) ? json_decode($profile->json_data, true) : $profile->json_data;
-            return $jsonData['Proxy'] . ':' . $jsonData['ShortTitleIconOverlay'];
+            return $jsonData['ShortTitleIconOverlay'];
         });
         
         return $this->getJsonResponse(true, 'OK', $proxyList);
