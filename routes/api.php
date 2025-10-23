@@ -34,6 +34,9 @@ Route::get('settings/get-storage-type', [SettingController::class, 'getStorageTy
 Route::get('settings/get-version', [SettingController::class, 'getPrivateServerVersion']); // 23.7.2024
 Route::get('settings/get-setting', [SettingController::class, 'getAllSetting']); // 24.9.2024
 
+// Public API - no auth required
+Route::get('profiles/count-open', [ProfileController::class, 'getOpenCount']);
+
 
 Route::middleware(['auth:sanctum'])->group(function(){
     Route::prefix('users')->group(function () {

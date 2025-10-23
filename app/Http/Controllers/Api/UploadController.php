@@ -12,11 +12,15 @@ class UploadController extends BaseController
     {
         if ($files = $request->file('file')) {
             try {
-                $file = $request->file->storeAs('public/profiles', $request->file_name);
+                if($request->file('file')->getSize() > 0) {
+                    $file = $request->file->storeAs('public/profiles', $request->file_name);
 
-                // If upload success -> $file = public\/profiles\/uOfKHHiGOgtn6rYygUrCsbRjHj7ypsm989oWpji0.mp4
-                $fileName = str_replace("public/profiles/", "", $file);
-                return $this->getJsonResponse(true, 'Thành công', ['path' => 'storage/profiles', 'file_name' => $fileName]);
+                    // If upload success -> $file = public\/profiles\/uOfKHHiGOgtn6rYygUrCsbRjHj7ypsm989oWpji0.mp4
+                    $fileName = str_replace("public/profiles/", "", $file);
+                    return $this->getJsonResponse(true, 'Thành công', ['path' => 'storage/profiles', 'file_name' => $fileName]);
+                }else {
+                    return $this->getJsonResponse(false, 'Thất bại', ['message' => 'File rỗng']);
+                }
             } catch (\Exception $ex){
                 return $this->getJsonResponse(false, 'Thất bại', $ex);
             }

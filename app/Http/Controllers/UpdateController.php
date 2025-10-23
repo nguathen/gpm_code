@@ -97,8 +97,8 @@ class UpdateController extends Controller
                 role INT COMMENT '1 - read only, 2 - full control',
                 created_at TIMESTAMP NULL,
                 updated_at TIMESTAMP NULL,
-                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES `users`(id) ON DELETE CASCADE
             );";
 
             DB::statement($sql);

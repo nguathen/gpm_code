@@ -94,11 +94,13 @@ class AdminController extends Controller
     }
 
     public function resetProfileStatus(){
-        $profiles = Profile::get();
-        foreach ($profiles as $profile){
-            $profile->status = 1;
-            $profile->save();
-        }
+        Profile::query()->update(['status' => 1]);
+        // Forearch exception: Allowed memory size of ... bytes exhausted (tried to allocate ... bytes) 
+        // $profiles = Profile::get();
+        // foreach ($profiles as $profile){
+        //     $profile->status = 1;
+        //     $profile->save();
+        // }
         return redirect()->back()->with('msg', 'Reset profile status successfully');
     }
 

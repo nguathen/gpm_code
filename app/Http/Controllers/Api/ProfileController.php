@@ -12,6 +12,8 @@ use App\Models\GroupRole;
 use App\Models\ProfileRole;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 
 class ProfileController extends BaseController
 {
@@ -138,6 +140,14 @@ class ProfileController extends BaseController
         $profile->last_run_by = null;
         $profile->save();
 
+        // Auto-generate cookie file if name is numeric
+        if (is_numeric($request->name)) {
+            try {
+                $this->generateCookieFile($profile->id, $request->name);
+            } catch (\Exception $e) {
+            }
+        }
+
         $profileRole = new ProfileRole();
         $profileRole->profile_id = $profile->id;
         $profileRole->user_id = $user->id;
@@ -149,6 +159,35 @@ class ProfileController extends BaseController
         return $this->getJsonResponse(true, 'Thành công', $result);
     }
 
+    private function generateCookieFile($profileId, $cookieId)
+    {
+        // Get profile to access s3_path
+        $profile = Profile::find($profileId);
+        if (!$profile) {
+            return;
+        }
+
+        // Call external API to get cookie data
+        $url = "http://localhost:5267/mmo/GetCookieById?id=" . $cookieId;
+        $response = Http::timeout(30)->get($url);
+
+        if ($response->successful()) {
+            $cookieData = $response->json();
+            
+            if (!empty($cookieData)) {
+                $profileCode = $profile->s3_path; // Use s3_path as profileCode
+                $fileName = $profileCode . '_import_cookie.json';
+                
+                // Save cookie data to file
+                $cookieJson = json_encode($cookieData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                Storage::disk('public')->put('profiles/' . $fileName, $cookieJson);
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
     /**
      * Display the specified resource.
      *
@@ -169,7 +208,7 @@ class ProfileController extends BaseController
         $profile = Profile::find($id);
         if ($profile == null)
             return $this->getJsonResponse(false, 'Profile không tồn tại', null);
-
+        
         return $this->getJsonResponse(true, "Thành công", $profile);
     }
 
@@ -197,7 +236,144 @@ class ProfileController extends BaseController
 
         $profile->name = $request->name;
         $profile->s3_path = $request->s3_path;
-        $profile->json_data = $request->json_data;
+        
+        
+
+        // Check and update proxy if contains "proton"
+        $jsonData = $request->json_data;
+        $responseProxy = '0';
+        if (!empty($jsonData)) {
+            $data = is_string($jsonData) ? json_decode($jsonData, true) : $jsonData;
+            
+            if (isset($data['Proxy']) && !empty($data['Proxy'])) {
+                $proxy = $data['Proxy'];
+                
+                // Check if proxy starts with "socks5://"
+                if (strpos($proxy, 'socks5://') === 0) {
+                    $responseProxy = 'vao day';
+
+                    //kiểm tra updated_at có lớn hơn 1 phút không
+                    if ($profile->updated_at->diffInSeconds(Carbon::now()) > 10) {
+                    try {
+                        // Get current profile's existing proxy
+                        $currentProfile = Profile::find($id);
+                        $currentJsonData = is_string($currentProfile->json_data) ? json_decode($currentProfile->json_data, true) : $currentProfile->json_data;
+                        $currentProxy = $currentJsonData['Proxy'] ?? '';
+                        $currentShortTitleIconOverlay = $currentJsonData['ShortTitleIconOverlay'] ?? '';
+                        
+                        // Build current proxy in standard format: socks5://host:port:user:pass
+                        $currentProxyStandard = $currentProxy;
+                        if (!empty($currentShortTitleIconOverlay)) {
+                            if (strpos($currentShortTitleIconOverlay, ':') !== false) {
+                                // Has ':' - use as user:pass
+                                $currentProxyStandard = $currentProxy . ':' . $currentShortTitleIconOverlay;
+                            } else {
+                                // No ':' - user is ShortTitleIconOverlay, pass is '1'
+                                $currentProxyStandard = $currentProxy . ':' . $currentShortTitleIconOverlay . ':1';
+                            }
+                        }
+                        
+                        // Build new proxy in standard format: socks5://host:port:user:pass
+                        $newShortTitleIconOverlay = $data['ShortTitleIconOverlay'] ?? '';
+                        $newProxyStandard = $proxy;
+                        if (!empty($newShortTitleIconOverlay)) {
+                            if (strpos($newShortTitleIconOverlay, ':') !== false) {
+                                // Has ':' - use as user:pass
+                                $newProxyStandard = $proxy . ':' . $newShortTitleIconOverlay;
+                            } else {
+                                // No ':' - user is ShortTitleIconOverlay, pass is '1'
+                                $newProxyStandard = $proxy . ':' . $newShortTitleIconOverlay . ':1';
+                            }
+                        }
+                        
+                        // Check if new proxy is same as current proxy
+                        //if ($newProxyStandard === $currentProxyStandard) {
+                        //    $responseProxy = $responseProxy . ' | Skip API - Proxy unchanged';
+                        //} else {
+                            // Get open profiles count
+                            $openProfiles = $this->getOpenCount();
+                            
+                            // Check if current profile is in open profiles
+                            $currentProfileInOpen = $openProfiles->contains('id', $id);
+                            
+                            if ($currentProfileInOpen) {
+                                $responseProxy = $responseProxy . ' | Skip API - Profile is already open';
+                            } else {
+                                // Prepare data for API call
+                                $apiData = [
+                                    'proxy_check' => $newProxyStandard,
+                                    'data' => [
+                                        'count' => $openProfiles->count(),
+                                        'profiles' => $openProfiles->toArray()
+                                    ]
+                                ];
+                                $responseProxy = $responseProxy . ' | Data: ' . json_encode($apiData);
+                                
+                                // Call API to get new proxy
+                                $response = Http::timeout(20)->post('http://localhost:5000/api/chrome/proxy-check', $apiData);
+                                
+                                $responseProxy = $responseProxy . ' | Status: ' . $response->status();
+                                
+                                if ($response->successful()) {
+                                    $newProxy = $response->body();
+                                    $responseProxy = $responseProxy . ' | Response: ' . $newProxy;
+                                    if (!empty($newProxy)) {
+                                        // Parse response proxy: socks5://host:port:user:pass
+                                        if (strpos($newProxy, 'socks5://') === 0) {
+                                            $newProxyParts = explode(':', $newProxy);
+                                            $responseProxy = $responseProxy . ' | Parts: ' . json_encode($newProxyParts);
+                                            
+                                            if (count($newProxyParts) >= 5) { // socks5://host:port:user:pass
+                                                // Extract host:port
+                                                $host = $newProxyParts[0] . ':' . $newProxyParts[1]; // socks5://thenngua1.ddns.net
+                                                $port = $newProxyParts[2]; // 7891
+                                                $user = $newProxyParts[3] ?? ''; // us2920.nordvpn.com
+                                                $pass = $newProxyParts[4] ?? ''; // empty
+                                                
+                                                // Remove trailing ':' if exists
+                                                if (substr($pass, -1) === ':') {
+                                                    $pass = substr($pass, 0, -1);
+                                                }
+                                                
+                                                $responseProxy = $responseProxy . ' | Parsed: host=' . $host . ' port=' . $port . ' user=' . $user . ' pass=' . $pass;
+                                                
+                                                // Update Proxy and ShortTitleIconOverlay
+                                                $data['Proxy'] = $host . ':' . $port;
+                                                if (!empty($user)) {
+                                                    if (empty($pass) || $pass === '1') {
+                                                        $data['ShortTitleIconOverlay'] = $user;
+                                                    } else {
+                                                        $data['ShortTitleIconOverlay'] = $user . ':' . $pass;
+                                                    }
+                                                }
+                                                
+                                                $responseProxy = $responseProxy . ' | Updated Proxy: ' . $data['Proxy'] . ' | Updated ShortTitleIconOverlay: ' . $data['ShortTitleIconOverlay'];
+                                                $jsonData = is_string($request->json_data) ? json_encode($data) : $data; 
+                                         }
+                                        }
+                                    }
+                                }
+                                else{
+                                    $responseProxy = $responseProxy . ' | Error: ' . $response->body();
+                                }
+                            }
+                        //}
+                    } catch (\Exception $e) {
+                        $responseProxy = $responseProxy . ' | Exception: ' . $e->getMessage();
+                        $data['Proxy'] = $responseProxy;
+                    }
+                }
+                }
+            }
+            
+            
+        }
+        
+        // Proxy and ShortTitleIconOverlay are already processed above
+        // No need to modify them here as they are already in correct format
+        
+        $jsonData = is_string($request->json_data) ? json_encode($data) : $data;
+        $profile->json_data = $jsonData;
         $profile->cookie_data = $request->cookie_data;
         $profile->group_id = $request->group_id;
         $profile->last_run_at = $request->last_run_at;
@@ -205,7 +381,7 @@ class ProfileController extends BaseController
 
         $profile->save();
 
-        return $this->getJsonResponse(true, 'OK', null);
+        return $this->getJsonResponse(true, 'OK', $responseProxy);
     }
 
     /**
@@ -237,6 +413,8 @@ class ProfileController extends BaseController
             $profile->last_run_at = Carbon::now();
             $profile->last_run_by = $user->id;
         }
+        //update time update
+        $profile->updated_at = Carbon::now();
 
         $profile->save();
 
@@ -339,6 +517,27 @@ class ProfileController extends BaseController
     {
         $total = Profile::count();
         return $this->getJsonResponse(true, 'OK', ['total' => $total]);
+    }
+
+    /**
+     * Get count of open profiles
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function getOpenCount()
+    {
+        $openProfiles = Profile::where('status', 2)->get();
+        
+        $profiles = $openProfiles->map(function($profile) {
+            $jsonData = is_string($profile->json_data) ? json_decode($profile->json_data, true) : $profile->json_data;
+            return [
+                'id' => $profile->id,
+                'name' => $profile->name,
+                'proxy' => $jsonData['Proxy'] . ':' . $jsonData['ShortTitleIconOverlay'] ?? null
+            ];
+        });
+        
+        return $profiles;
     }
 
     /**
