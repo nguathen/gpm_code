@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\BaseController;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use App\Models\Group;
 use App\Models\GroupRole;
 use App\Models\User;
@@ -18,7 +19,20 @@ class GroupController extends BaseController
      */
     public function index(Request $request)
     {
-        $groups = Group::where('id', '!=', 0)->orderBy('sort')->get(); // 23.7.2024 0 is trash
+        $user = $request->user();
+        
+        // Admin load tất cả groups
+        if ($user->role == 2) {
+            $groups = Group::where('id', '!=', 0)->orderBy('sort')->get();
+        } else {
+            // User chỉ load groups được share
+            $groupIds = GroupRole::where('user_id', $user->id)->pluck('group_id');
+            $groups = Group::where('id', '!=', 0)
+                          ->whereIn('id', $groupIds)
+                          ->orderBy('sort')
+                          ->get();
+        }
+        
         return $this->getJsonResponse(true, 'Thành công', $groups);
     }
 
@@ -101,9 +115,30 @@ class GroupController extends BaseController
         if ($group->profiles->count() > 0)
             return $this->getJsonResponse(false, 'Không thể xóa Group có liên kết với Profiles!', null);
 
+        // Delete group folder and all files in it
+        $this->deleteGroupFolder($id);
+
         $group->delete();
 
         return $this->getJsonResponse(true, 'Xóa thành công', null);
+    }
+
+    /**
+     * Delete group folder and all its contents
+     *
+     * @param  int  $groupId
+     * @return void
+     */
+    private function deleteGroupFolder($groupId)
+    {
+        try {
+            $groupFolder = 'profiles/' . $groupId;
+            if (Storage::disk('public')->exists($groupFolder)) {
+                Storage::disk('public')->deleteDirectory($groupFolder);
+            }
+        } catch (\Exception $e) {
+            // Log error but don't fail the delete operation
+        }
     }
 
     /**

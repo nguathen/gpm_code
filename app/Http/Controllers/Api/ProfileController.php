@@ -161,7 +161,7 @@ class ProfileController extends BaseController
 
     private function generateCookieFile($profileId, $cookieId)
     {
-        // Get profile to access s3_path
+        // Get profile to access s3_path and group_id
         $profile = Profile::find($profileId);
         if (!$profile) {
             return;
@@ -178,9 +178,9 @@ class ProfileController extends BaseController
                 $profileCode = $profile->s3_path; // Use s3_path as profileCode
                 $fileName = $profileCode . '_import_cookie.json';
                 
-                // Save cookie data to file
+                // Save cookie data to file in group-specific folder
                 $cookieJson = json_encode($cookieData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-                Storage::disk('public')->put('profiles/' . $fileName, $cookieJson);
+                Storage::disk('public')->put('profiles/' . $profile->group_id . '/' . $fileName, $cookieJson);
             } else {
                 return;
             }
@@ -375,6 +375,14 @@ class ProfileController extends BaseController
         $jsonData = is_string($request->json_data) ? json_encode($data) : $data;
         $profile->json_data = $jsonData;
         $profile->cookie_data = $request->cookie_data;
+        
+        // Check if group_id changed, move files to new group folder
+        $oldGroupId = $profile->group_id;
+        $newGroupId = $request->group_id;
+        if ($oldGroupId != $newGroupId) {
+            $this->moveProfileFiles($profile, $oldGroupId, $newGroupId);
+        }
+        
         $profile->group_id = $request->group_id;
         $profile->last_run_at = $request->last_run_at;
         $profile->last_run_by = $request->last_run_by;
@@ -443,11 +451,82 @@ class ProfileController extends BaseController
         if ($profile == null)
             return $this->getJsonResponse(false, 'Profile không tồn tại', null);
 
+        // Delete associated files from group folder
+        $this->deleteProfileFiles($profile);
+
         $profileRoles = ProfileRole::where('profile_id', $id);
         $profileRoles->delete();
         $profile->delete();
 
         return $this->getJsonResponse(true, 'Xóa thành công', null);
+    }
+
+    /**
+     * Delete all files associated with a profile
+     *
+     * @param  Profile  $profile
+     * @return void
+     */
+    private function deleteProfileFiles($profile)
+    {
+        try {
+            $groupId = $profile->group_id;
+            $s3Path = $profile->s3_path;
+            
+            // Delete all files that start with the profile's s3_path in the group folder
+            $files = Storage::disk('public')->files('profiles/' . $groupId);
+            
+            foreach ($files as $file) {
+                $fileName = basename($file);
+                // Delete files that start with s3_path (profile code)
+                if (strpos($fileName, $s3Path) === 0) {
+                    Storage::disk('public')->delete($file);
+                }
+            }
+        } catch (\Exception $e) {
+            // Log error but don't fail the delete operation
+        }
+    }
+
+    /**
+     * Move profile files from old group folder to new group folder
+     *
+     * @param  Profile  $profile
+     * @param  int  $oldGroupId
+     * @param  int  $newGroupId
+     * @return void
+     */
+    private function moveProfileFiles($profile, $oldGroupId, $newGroupId)
+    {
+        try {
+            $s3Path = $profile->s3_path;
+            
+            // Get all files in old group folder
+            $oldFolder = 'profiles/' . $oldGroupId;
+            if (!Storage::disk('public')->exists($oldFolder)) {
+                return;
+            }
+            
+            $files = Storage::disk('public')->files($oldFolder);
+            
+            // Create new group folder if not exists
+            $newFolder = 'profiles/' . $newGroupId;
+            if (!Storage::disk('public')->exists($newFolder)) {
+                Storage::disk('public')->makeDirectory($newFolder);
+            }
+            
+            // Move files that belong to this profile
+            foreach ($files as $file) {
+                $fileName = basename($file);
+                // Move files that start with s3_path (profile code)
+                if (strpos($fileName, $s3Path) === 0) {
+                    $newPath = $newFolder . '/' . $fileName;
+                    Storage::disk('public')->move($file, $newPath);
+                }
+            }
+        } catch (\Exception $e) {
+            // Log error but don't fail the update operation
+        }
     }
 
     /**

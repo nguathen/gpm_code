@@ -13,10 +13,16 @@ class UploadController extends BaseController
         if ($files = $request->file('file')) {
             try {
                 if($request->file('file')->getSize() > 0) {
-                    $file = $request->file->storeAs('public/profiles', $request->file_name);
+                    // Get group_id from request, default to 1 if not provided
+                    $groupId = $request->input('group_id', 1);
+                    
+                    // Store file in group-specific folder
+                    $file = $request->file->storeAs('public/profiles/' . $groupId, $request->file_name);
 
-                    // If upload success -> $file = public\/profiles\/uOfKHHiGOgtn6rYygUrCsbRjHj7ypsm989oWpji0.mp4
-                    $fileName = str_replace("public/profiles/", "", $file);
+                    // If upload success -> $file = public\/profiles\/{group_id}\/filename.ext
+                    $fileName = str_replace("public/profiles/{$groupId}/", "", $file);
+                    
+                    // Return path without group_id for backward compatibility with client
                     return $this->getJsonResponse(true, 'Thành công', ['path' => 'storage/profiles', 'file_name' => $fileName]);
                 }else {
                     return $this->getJsonResponse(false, 'Thất bại', ['message' => 'File rỗng']);
@@ -30,7 +36,15 @@ class UploadController extends BaseController
     }
 
     public function delete(Request $request) {
-        $fullLocation = 'public/profiles/'.$request->file;
+        // Get group_id from request to delete from correct folder
+        $groupId = $request->input('group_id', 1);
+        $fullLocation = 'public/profiles/' . $groupId . '/' . $request->file;
+        
+        // Also try to delete from old location for backward compatibility
+        if (!Storage::exists($fullLocation)) {
+            $fullLocation = 'public/profiles/' . $request->file;
+        }
+        
         Storage::delete($fullLocation);
         return $this->getJsonResponse(true, 'Thành công', []);
     }

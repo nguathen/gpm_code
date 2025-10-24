@@ -45,3 +45,27 @@ Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
 Route::middleware(['auth:sanctum'])->group(function(){
     Route::get('/auto-update', [UpdateController::class, 'updateFromRemoteZip']);
 });
+
+// Route to serve profile files from group folders with backward compatibility
+Route::get('/storage/profiles/{filename}', function($filename) {
+    // Try to find file in group folders
+    $publicPath = storage_path('app/public/profiles');
+    
+    // Get all group folders
+    $groupFolders = glob($publicPath . '/*', GLOB_ONLYDIR);
+    
+    foreach ($groupFolders as $folder) {
+        $filePath = $folder . '/' . $filename;
+        if (file_exists($filePath)) {
+            return response()->file($filePath);
+        }
+    }
+    
+    // Fallback: try old location (root profiles folder) for backward compatibility
+    $oldPath = $publicPath . '/' . $filename;
+    if (file_exists($oldPath)) {
+        return response()->file($oldPath);
+    }
+    
+    abort(404);
+})->where('filename', '.*');
