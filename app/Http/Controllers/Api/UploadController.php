@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use App\Models\Profile;
 
 class UploadController extends BaseController
 {
@@ -13,8 +14,24 @@ class UploadController extends BaseController
         if ($files = $request->file('file')) {
             try {
                 if($request->file('file')->getSize() > 0) {
-                    // Get group_id from request, default to 1 if not provided
-                    $groupId = $request->input('group_id', 1);
+                    // Get group_id from request or find from profile
+                    $groupId = $request->input('group_id');
+                    
+                    // If no group_id provided, try to find from filename (s3_path)
+                    if (!$groupId) {
+                        $fileName = $request->file_name;
+                        // Extract s3_path from filename (remove extensions like _ext_cmd.json, _restore_cookie.json, etc)
+                        $s3Path = preg_replace('/(_ext_cmd\.json|_ext_info\.json|_restore_cookie\.json|_import_cookie\.json)$/', '', $fileName);
+                        
+                        // Find profile by s3_path
+                        $profile = Profile::where('s3_path', $s3Path)->first();
+                        if ($profile) {
+                            $groupId = $profile->group_id;
+                        } else {
+                            // Default to 1 if profile not found
+                            $groupId = 1;
+                        }
+                    }
                     
                     // Store file in group-specific folder
                     $file = $request->file->storeAs('public/profiles/' . $groupId, $request->file_name);
@@ -36,12 +53,31 @@ class UploadController extends BaseController
     }
 
     public function delete(Request $request) {
-        // Get group_id from request to delete from correct folder
-        $groupId = $request->input('group_id', 1);
-        $fullLocation = 'public/profiles/' . $groupId . '/' . $request->file;
+        // Get group_id from request or find from profile
+        $groupId = $request->input('group_id');
         
-        // Also try to delete from old location for backward compatibility
-        if (!Storage::exists($fullLocation)) {
+        // If no group_id provided, try to find from filename
+        if (!$groupId) {
+            $fileName = $request->file;
+            // Extract s3_path from filename
+            $s3Path = preg_replace('/(_ext_cmd\.json|_ext_info\.json|_restore_cookie\.json|_import_cookie\.json)$/', '', $fileName);
+            
+            // Find profile by s3_path
+            $profile = Profile::where('s3_path', $s3Path)->first();
+            if ($profile) {
+                $groupId = $profile->group_id;
+            }
+        }
+        
+        if ($groupId) {
+            $fullLocation = 'public/profiles/' . $groupId . '/' . $request->file;
+            
+            // Also try to delete from old location for backward compatibility
+            if (!Storage::exists($fullLocation)) {
+                $fullLocation = 'public/profiles/' . $request->file;
+            }
+        } else {
+            // Fallback to old location
             $fullLocation = 'public/profiles/' . $request->file;
         }
         
