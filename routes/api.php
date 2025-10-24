@@ -54,6 +54,8 @@ Route::middleware(['auth:sanctum'])->group(function(){
         Route::get('/delete/{id}', [GroupController::class, 'destroy']);
         Route::get('/share/{id}', [GroupController::class, 'share']);
         Route::get('/roles/{id}', [GroupController::class, 'getGroupRoles']);
+        Route::post('/toggle-auto-backup/{id}', [GroupController::class, 'toggleAutoBackup']);
+        Route::post('/manual-backup/{id}', [GroupController::class, 'manualBackup']);
     });
 
     Route::prefix('profiles')->group(function () {

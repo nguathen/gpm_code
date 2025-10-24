@@ -203,4 +203,104 @@ class GroupController extends BaseController
 
         return $this->getJsonResponse(true, 'OK', null);
     }
+
+    /**
+     * Toggle auto backup for a group
+     *
+     * @param  int  $id
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function toggleAutoBackup($id, Request $request)
+    {
+        $user = $request->user();
+
+        if ($user->role < 2)
+            return $this->getJsonResponse(false, 'Không đủ quyền. Bạn cần có quyền admin để sử dụng tính năng này!', null);
+
+        $group = Group::find($id);
+        if ($group == null)
+            return $this->getJsonResponse(false, 'Group không tồn tại', null);
+
+        $group->auto_backup = $request->auto_backup;
+        $group->save();
+
+        return $this->getJsonResponse(true, 'Cập nhật auto backup thành công', [
+            'auto_backup' => $group->auto_backup
+        ]);
+    }
+
+    /**
+     * Manually backup all files in a group to Google Drive
+     *
+     * @param  int  $id
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function manualBackup($id, Request $request)
+    {
+        $user = $request->user();
+
+        if ($user->role < 2)
+            return $this->getJsonResponse(false, 'Không đủ quyền. Bạn cần có quyền admin để sử dụng tính năng này!', null);
+
+        $group = Group::find($id);
+        if ($group == null)
+            return $this->getJsonResponse(false, 'Group không tồn tại', null);
+
+        try {
+            $googleDriveService = app(\App\Services\GoogleDriveService::class);
+
+            if (!$googleDriveService->isConfigured()) {
+                return $this->getJsonResponse(false, 'Google Drive chưa được cấu hình', null);
+            }
+
+            // Get or create Google Drive folder for this group
+            $folderId = $group->google_drive_folder_id;
+            
+            if (!$folderId) {
+                $folderId = $googleDriveService->getOrCreateGroupFolder($group->id, $group->name);
+                
+                if ($folderId) {
+                    $group->google_drive_folder_id = $folderId;
+                    $group->save();
+                } else {
+                    return $this->getJsonResponse(false, 'Không thể tạo folder trên Google Drive', null);
+                }
+            }
+
+            // Backup all files in the group folder
+            $groupFolder = 'profiles/' . $group->id;
+            
+            if (!Storage::disk('public')->exists($groupFolder)) {
+                return $this->getJsonResponse(false, 'Không tìm thấy folder của group', null);
+            }
+            
+            $files = Storage::disk('public')->files($groupFolder);
+            $successCount = 0;
+            $failCount = 0;
+            
+            foreach ($files as $file) {
+                $fileName = basename($file);
+                $localPath = storage_path('app/public/' . $file);
+                
+                $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
+                
+                if ($result) {
+                    $successCount++;
+                } else {
+                    $failCount++;
+                }
+            }
+
+            return $this->getJsonResponse(true, 'Backup hoàn tất', [
+                'success' => $successCount,
+                'failed' => $failCount,
+                'total' => count($files)
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->getJsonResponse(false, 'Lỗi khi backup: ' . $e->getMessage(), null);
+        }
+    }
 }

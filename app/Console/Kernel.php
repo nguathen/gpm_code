@@ -15,7 +15,11 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        // $schedule->command('inspire')->hourly();
+        // Monitor Google Drive token every 6 hours to ensure it's always valid
+        $schedule->command('googledrive:monitor-token')
+                 ->everySixHours()
+                 ->withoutOverlapping()
+                 ->runInBackground();
     }
 
     /**

@@ -37,6 +37,13 @@ Route::get('/admin/active-user/{id}', [AdminController::class, 'toogleActiveUser
 Route::get('/admin/reset-profile-status', [AdminController::class, 'resetProfileStatus']);
 Route::get('/admin/save-setting', [AdminController::class, 'saveSetting']);
 Route::get('/admin/migration', [AdminController::class, 'runMigrations']);
+Route::post('/admin/google-drive/upload-credentials', [AdminController::class, 'uploadGoogleDriveCredentials']);
+Route::get('/admin/google-drive/auth-url', [AdminController::class, 'getGoogleDriveAuthUrl']);
+Route::post('/admin/google-drive/save-token', [AdminController::class, 'saveGoogleDriveToken']);
+Route::post('/admin/google-drive/save-root-folder', [AdminController::class, 'saveGoogleDriveRootFolder']);
+Route::get('/admin/google-drive/reset', [AdminController::class, 'resetGoogleDrive']);
+Route::post('/admin/groups/toggle-auto-backup/{id}', [AdminController::class, 'toggleGroupAutoBackup']);
+Route::post('/admin/groups/manual-backup/{id}', [AdminController::class, 'manualGroupBackup']);
 
 Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
     phpinfo();

@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use App\Models\User;
 use App\Models\Profile;
 use App\Models\Setting;
+use App\Models\Group;
 use Illuminate\Support\Facades\Artisan;
 use stdClass;
 
@@ -50,7 +52,51 @@ class AdminController extends Controller
         $s3Config->S3_REGION = env('S3_REGION');
 
         $cache_extension_setting = Setting::where('name', 'cache_extension')->first()->value ?? "off";
-        return view('index', compact('users', 'storageType', 's3Config', 'cache_extension_setting'));
+        
+        // Get all groups for backup management
+        $groups = Group::where('id', '!=', 0)->orderBy('sort')->get();
+        
+        // Check Google Drive configuration status
+        $googleDriveConfigured = file_exists(storage_path('app/google-drive-credentials.json')) && 
+                                 file_exists(storage_path('app/google-drive-token.json'));
+        
+        $googleDriveRootFolderId = env('GOOGLE_DRIVE_ROOT_FOLDER_ID', '');
+        
+        // Get Google Drive account info if configured
+        $googleDriveAccount = null;
+        if ($googleDriveConfigured) {
+            try {
+                $client = new \Google\Client();
+                $client->setAuthConfig(storage_path('app/google-drive-credentials.json'));
+                $client->addScope(\Google\Service\Drive::DRIVE_FILE);
+                $client->setAccessType('offline');
+                
+                $tokenPath = storage_path('app/google-drive-token.json');
+                $accessToken = json_decode(file_get_contents($tokenPath), true);
+                $client->setAccessToken($accessToken);
+                
+                // Refresh token if expired
+                if ($client->isAccessTokenExpired()) {
+                    if ($client->getRefreshToken()) {
+                        $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                        file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+                    }
+                }
+                
+                $service = new \Google\Service\Drive($client);
+                $about = $service->about->get(['fields' => 'user']);
+                
+                $googleDriveAccount = [
+                    'name' => $about->getUser()->getDisplayName(),
+                    'email' => $about->getUser()->getEmailAddress()
+                ];
+            } catch (\Exception $e) {
+                // If error, mark as not configured
+                $googleDriveConfigured = false;
+            }
+        }
+        
+        return view('index', compact('users', 'storageType', 's3Config', 'cache_extension_setting', 'groups', 'googleDriveConfigured', 'googleDriveRootFolderId', 'googleDriveAccount'));
     }
 
     public function toogleActiveUser($id) {
@@ -118,13 +164,284 @@ class AdminController extends Controller
         }
     }
 
+    public function uploadGoogleDriveCredentials(Request $request) {
+        try {
+            if (!$request->hasFile('credentials')) {
+                return redirect()->back()->with('msg', 'Vui lòng chọn file credentials!');
+            }
+
+            $file = $request->file('credentials');
+            
+            // Validate JSON file
+            $content = file_get_contents($file->getRealPath());
+            $json = json_decode($content, true);
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                return redirect()->back()->with('msg', 'File không đúng định dạng JSON!');
+            }
+
+            // Save credentials file
+            $file->storeAs('', 'google-drive-credentials.json');
+            
+            return redirect()->back()->with('msg', 'Upload credentials thành công! Bây giờ hãy authenticate với Google Drive.');
+        } catch (\Exception $e) {
+            return redirect()->back()->with('msg', 'Lỗi: ' . $e->getMessage());
+        }
+    }
+
+    public function getGoogleDriveAuthUrl() {
+        try {
+            $credentialsPath = storage_path('app/google-drive-credentials.json');
+            
+            if (!file_exists($credentialsPath)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Chưa upload credentials file!'
+                ]);
+            }
+
+            $client = new \Google\Client();
+            $client->setAuthConfig($credentialsPath);
+            $client->addScope(\Google\Service\Drive::DRIVE_FILE);
+            $client->setAccessType('offline');
+            $client->setPrompt('select_account consent');
+
+            $authUrl = $client->createAuthUrl();
+
+            return response()->json([
+                'success' => true,
+                'auth_url' => $authUrl
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+    public function saveGoogleDriveToken(Request $request) {
+        try {
+            $authCode = $request->auth_code;
+            
+            if (empty($authCode)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Vui lòng nhập authorization code!'
+                ]);
+            }
+
+            $credentialsPath = storage_path('app/google-drive-credentials.json');
+            
+            if (!file_exists($credentialsPath)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Chưa upload credentials file!'
+                ]);
+            }
+
+            $client = new \Google\Client();
+            $client->setAuthConfig($credentialsPath);
+            $client->addScope(\Google\Service\Drive::DRIVE_FILE);
+            $client->setAccessType('offline');
+
+            // Exchange authorization code for access token
+            $accessToken = $client->fetchAccessTokenWithAuthCode($authCode);
+
+            if (isset($accessToken['error'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Lỗi: ' . ($accessToken['error_description'] ?? $accessToken['error'])
+                ]);
+            }
+
+            // Save token
+            file_put_contents(storage_path('app/google-drive-token.json'), json_encode($accessToken));
+
+            // Test connection
+            $client->setAccessToken($accessToken);
+            $service = new \Google\Service\Drive($client);
+            $about = $service->about->get(['fields' => 'user']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Kết nối thành công!',
+                'user' => [
+                    'name' => $about->getUser()->getDisplayName(),
+                    'email' => $about->getUser()->getEmailAddress()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+    public function saveGoogleDriveRootFolder(Request $request) {
+        try {
+            $folderId = $request->folder_id ?? '';
+            $this->setEnvironmentValue('GOOGLE_DRIVE_ROOT_FOLDER_ID', $folderId);
+            
+            return redirect()->back()->with('msg', 'Đã lưu Root Folder ID!');
+        } catch (\Exception $e) {
+            return redirect()->back()->with('msg', 'Lỗi: ' . $e->getMessage());
+        }
+    }
+
+    public function resetGoogleDrive() {
+        try {
+            $credentialsPath = storage_path('app/google-drive-credentials.json');
+            $tokenPath = storage_path('app/google-drive-token.json');
+            
+            if (file_exists($credentialsPath)) {
+                unlink($credentialsPath);
+            }
+            
+            if (file_exists($tokenPath)) {
+                unlink($tokenPath);
+            }
+            
+            return redirect()->back()->with('msg', 'Đã xóa cấu hình Google Drive!');
+        } catch (\Exception $e) {
+            return redirect()->back()->with('msg', 'Lỗi: ' . $e->getMessage());
+        }
+    }
+
+    public function toggleGroupAutoBackup($id, Request $request) {
+        $loginUser = Auth::user();
+        if ($loginUser == null || $loginUser->role != 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không đủ quyền. Bạn cần có quyền admin!'
+            ]);
+        }
+
+        $group = Group::find($id);
+        if ($group == null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Group không tồn tại'
+            ]);
+        }
+
+        $group->auto_backup = $request->auto_backup;
+        $group->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cập nhật auto backup thành công',
+            'data' => [
+                'auto_backup' => $group->auto_backup
+            ]
+        ]);
+    }
+
+    public function manualGroupBackup($id, Request $request) {
+        $loginUser = Auth::user();
+        if ($loginUser == null || $loginUser->role != 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không đủ quyền. Bạn cần có quyền admin!'
+            ]);
+        }
+
+        $group = Group::find($id);
+        if ($group == null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Group không tồn tại'
+            ]);
+        }
+
+        try {
+            $googleDriveService = app(\App\Services\GoogleDriveService::class);
+
+            if (!$googleDriveService->isConfigured()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Google Drive chưa được cấu hình'
+                ]);
+            }
+
+            // Get or create Google Drive folder for this group
+            $folderId = $group->google_drive_folder_id;
+            
+            if (!$folderId) {
+                $folderId = $googleDriveService->getOrCreateGroupFolder($group->id, $group->name);
+                
+                if ($folderId) {
+                    $group->google_drive_folder_id = $folderId;
+                    $group->save();
+                } else {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Không thể tạo folder trên Google Drive'
+                    ]);
+                }
+            }
+
+            // Backup all files in the group folder
+            $groupFolder = 'profiles/' . $group->id;
+            
+            if (!Storage::disk('public')->exists($groupFolder)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Không tìm thấy folder của group'
+                ]);
+            }
+            
+            $files = Storage::disk('public')->files($groupFolder);
+            $successCount = 0;
+            $failCount = 0;
+            
+            foreach ($files as $file) {
+                $fileName = basename($file);
+                $localPath = storage_path('app/public/' . $file);
+                
+                $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
+                
+                if ($result) {
+                    $successCount++;
+                } else {
+                    $failCount++;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Backup hoàn tất',
+                'data' => [
+                    'success' => $successCount,
+                    'failed' => $failCount,
+                    'total' => count($files)
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi khi backup: ' . $e->getMessage()
+            ]);
+        }
+    }
+
     // Write .env
     private function setEnvironmentValue($envKey, $envValue) {
         $envFile = app()->environmentFilePath();
         $str = file_get_contents($envFile);
 
         $oldValue = env($envKey);
-        $str = str_replace("{$envKey}={$oldValue}", "{$envKey}={$envValue}", $str);
+        
+        // Check if key exists
+        if (strpos($str, $envKey) !== false) {
+            $str = str_replace("{$envKey}={$oldValue}", "{$envKey}={$envValue}", $str);
+        } else {
+            // Add new key at the end
+            $str .= "\n{$envKey}={$envValue}";
+        }
+        
         $fp = fopen($envFile, 'w');
         fwrite($fp, $str);
         fclose($fp);

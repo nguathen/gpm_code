@@ -31,4 +31,8 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'google_drive' => [
+        'root_folder_id' => env('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
+    ],
+
 ];
