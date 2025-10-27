@@ -44,6 +44,7 @@ Route::post('/admin/google-drive/save-root-folder', [AdminController::class, 'sa
 Route::get('/admin/google-drive/reset', [AdminController::class, 'resetGoogleDrive']);
 Route::post('/admin/groups/toggle-auto-backup/{id}', [AdminController::class, 'toggleGroupAutoBackup']);
 Route::post('/admin/groups/manual-backup/{id}', [AdminController::class, 'manualGroupBackup']);
+Route::post('/admin/groups/sync-from-drive/{id}', [AdminController::class, 'syncGroupFromDrive']);
 
 Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
     phpinfo();

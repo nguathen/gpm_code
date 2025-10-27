@@ -128,6 +128,8 @@ class BackupProfileToGoogleDrive implements ShouldQueue
         $files = Storage::disk('public')->files($groupFolder);
         $backedUpCount = 0;
         
+        $skippedCount = 0;
+        
         foreach ($files as $file) {
             $fileName = basename($file);
             
@@ -138,7 +140,10 @@ class BackupProfileToGoogleDrive implements ShouldQueue
                 // Backup to Google Drive
                 $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
                 
-                if ($result) {
+                if ($result === 'skipped') {
+                    $skippedCount++;
+                    Log::debug("File unchanged, skipped: {$fileName}");
+                } elseif ($result) {
                     $backedUpCount++;
                     Log::debug("Backed up file: {$fileName}");
                 } else {
@@ -147,7 +152,7 @@ class BackupProfileToGoogleDrive implements ShouldQueue
             }
         }
 
-        Log::info("Backed up {$backedUpCount} files for profile {$profile->id}");
+        Log::info("Profile {$profile->id} backup: {$backedUpCount} uploaded, {$skippedCount} skipped");
     }
 
     /**

@@ -267,25 +267,64 @@ class GoogleDriveService
     }
 
     /**
-     * Backup a file to Google Drive
-     * If file exists, update it. Otherwise, create new.
+     * Backup a file to Google Drive with smart skip
+     * If file exists and unchanged, skip. Otherwise, update or create new.
      *
      * @param string $localPath
      * @param string $fileName
      * @param string $folderId
-     * @return bool
+     * @return bool|string Returns true on success, 'skipped' if unchanged, false on error
      */
     public function backupFile($localPath, $fileName, $folderId)
     {
         try {
+            if (!file_exists($localPath)) {
+                Log::error("Local file not found: {$localPath}");
+                return false;
+            }
+
+            // Get local file info
+            $localMd5 = md5_file($localPath);
+            $localSize = filesize($localPath);
+            $localModTime = filemtime($localPath);
+
             // Search if file already exists
-            $existingFileId = $this->searchFile($fileName, $folderId);
+            $existingFileId = $this->searchFileWithMetadata($fileName, $folderId);
 
             if ($existingFileId) {
-                // Update existing file
-                return $this->updateFile($existingFileId, $localPath);
+                // Get existing file metadata
+                try {
+                    $existingFile = $this->service->files->get($existingFileId['id'], [
+                        'fields' => 'id,name,size,md5Checksum,modifiedTime'
+                    ]);
+
+                    $remoteMd5 = $existingFile->getMd5Checksum();
+                    $remoteSize = $existingFile->getSize();
+
+                    // Compare MD5 checksum - most reliable way
+                    if ($remoteMd5 && $remoteMd5 === $localMd5) {
+                        Log::debug("File unchanged, skipping: {$fileName} (MD5: {$localMd5})");
+                        return 'skipped';
+                    }
+
+                    // Fallback: compare size if MD5 not available
+                    if (!$remoteMd5 && $remoteSize == $localSize) {
+                        Log::debug("File likely unchanged (same size), skipping: {$fileName}");
+                        return 'skipped';
+                    }
+
+                    // File changed, update it
+                    Log::debug("File changed, updating: {$fileName} (Local MD5: {$localMd5}, Remote MD5: {$remoteMd5})");
+                    return $this->updateFile($existingFileId['id'], $localPath);
+
+                } catch (\Exception $e) {
+                    // If can't get metadata, update anyway to be safe
+                    Log::warning("Cannot get file metadata, updating: {$fileName}");
+                    return $this->updateFile($existingFileId['id'], $localPath);
+                }
             } else {
-                // Upload new file
+                // File doesn't exist, upload new
+                Log::debug("New file, uploading: {$fileName}");
                 $fileId = $this->uploadFile($localPath, $fileName, $folderId);
                 return $fileId !== null;
             }
@@ -293,6 +332,201 @@ class GoogleDriveService
             Log::error('Google Drive backup error: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Search for a file in a folder with metadata
+     *
+     * @param string $fileName
+     * @param string $folderId
+     * @return array|null File info with id
+     */
+    protected function searchFileWithMetadata($fileName, $folderId)
+    {
+        try {
+            $query = "name='{$fileName}' and '{$folderId}' in parents and trashed=false";
+            
+            $response = $this->service->files->listFiles([
+                'q' => $query,
+                'spaces' => 'drive',
+                'fields' => 'files(id, name, size, md5Checksum, modifiedTime)'
+            ]);
+
+            $files = $response->getFiles();
+            
+            if (count($files) > 0) {
+                return [
+                    'id' => $files[0]->getId(),
+                    'name' => $files[0]->getName(),
+                    'size' => $files[0]->getSize(),
+                    'md5' => $files[0]->getMd5Checksum(),
+                    'modifiedTime' => $files[0]->getModifiedTime()
+                ];
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::error('Google Drive search error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Download a file from Google Drive
+     *
+     * @param string $fileId
+     * @param string $destinationPath
+     * @return bool
+     */
+    public function downloadFile($fileId, $destinationPath)
+    {
+        try {
+            $this->refreshTokenIfNeeded();
+
+            $response = $this->service->files->get($fileId, [
+                'alt' => 'media'
+            ]);
+
+            $content = $response->getBody()->getContents();
+
+            // Ensure directory exists
+            $directory = dirname($destinationPath);
+            if (!is_dir($directory)) {
+                mkdir($directory, 0755, true);
+            }
+
+            file_put_contents($destinationPath, $content);
+            
+            Log::info("Downloaded file from Google Drive: {$fileId} to {$destinationPath}");
+            return true;
+
+        } catch (\Google\Service\Exception $e) {
+            if ($e->getCode() == 401) {
+                Log::warning('Google Drive: Token expired during download, refreshing...');
+                if ($this->refreshTokenIfNeeded()) {
+                    return $this->downloadFile($fileId, $destinationPath); // Retry once
+                }
+            }
+            Log::error('Google Drive download error: ' . $e->getMessage());
+            return false;
+        } catch (\Exception $e) {
+            Log::error('Google Drive download error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * List all files in a folder
+     *
+     * @param string $folderId
+     * @return array Array of files with id, name, size, md5Checksum
+     */
+    public function listFilesInFolder($folderId)
+    {
+        try {
+            $this->refreshTokenIfNeeded();
+
+            $query = "'{$folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'";
+            
+            $files = [];
+            $pageToken = null;
+
+            do {
+                $response = $this->service->files->listFiles([
+                    'q' => $query,
+                    'spaces' => 'drive',
+                    'fields' => 'nextPageToken, files(id, name, size, md5Checksum, modifiedTime)',
+                    'pageToken' => $pageToken,
+                    'pageSize' => 100
+                ]);
+
+                foreach ($response->getFiles() as $file) {
+                    $files[] = [
+                        'id' => $file->getId(),
+                        'name' => $file->getName(),
+                        'size' => $file->getSize(),
+                        'md5' => $file->getMd5Checksum(),
+                        'modifiedTime' => $file->getModifiedTime()
+                    ];
+                }
+
+                $pageToken = $response->getNextPageToken();
+            } while ($pageToken != null);
+
+            return $files;
+
+        } catch (\Exception $e) {
+            Log::error('Google Drive list files error: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Sync files from Google Drive to local storage
+     *
+     * @param string $folderId Google Drive folder ID
+     * @param string $localPath Local path to sync to
+     * @return array ['downloaded' => int, 'skipped' => int, 'failed' => int]
+     */
+    public function syncFromGoogleDrive($folderId, $localPath)
+    {
+        $downloaded = 0;
+        $skipped = 0;
+        $failed = 0;
+
+        try {
+            // Ensure local directory exists
+            if (!is_dir($localPath)) {
+                mkdir($localPath, 0755, true);
+            }
+
+            // Get all files from Google Drive
+            $driveFiles = $this->listFilesInFolder($folderId);
+            
+            Log::info("Starting sync from Google Drive folder {$folderId}. Found " . count($driveFiles) . " files.");
+
+            foreach ($driveFiles as $driveFile) {
+                $fileName = $driveFile['name'];
+                $localFilePath = $localPath . '/' . $fileName;
+
+                // Check if local file exists and is same
+                if (file_exists($localFilePath)) {
+                    $localMd5 = md5_file($localFilePath);
+                    $remoteMd5 = $driveFile['md5'];
+
+                    if ($localMd5 === $remoteMd5) {
+                        Log::debug("File unchanged, skipping download: {$fileName}");
+                        $skipped++;
+                        continue;
+                    }
+
+                    Log::debug("File changed on Google Drive, downloading: {$fileName}");
+                } else {
+                    Log::debug("New file on Google Drive, downloading: {$fileName}");
+                }
+
+                // Download file
+                $result = $this->downloadFile($driveFile['id'], $localFilePath);
+                
+                if ($result) {
+                    $downloaded++;
+                } else {
+                    $failed++;
+                }
+            }
+
+            Log::info("Sync completed from Google Drive. Downloaded: {$downloaded}, Skipped: {$skipped}, Failed: {$failed}");
+
+        } catch (\Exception $e) {
+            Log::error('Sync from Google Drive error: ' . $e->getMessage());
+        }
+
+        return [
+            'downloaded' => $downloaded,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'total' => count($driveFiles ?? [])
+        ];
     }
 
     /**

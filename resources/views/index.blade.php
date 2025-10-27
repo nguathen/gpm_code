@@ -240,7 +240,10 @@
                             {{ $group->auto_backup ? 'Tắt' : 'Bật' }} Auto Backup
                         </button>
                         <button class="btn btn-sm btn-success" data-group-id="{{ $group->id }}" onclick="manualBackup(this)">
-                            Manual Backup
+                            <i class="fas fa-upload"></i> Backup to Drive
+                        </button>
+                        <button class="btn btn-sm btn-info" data-group-id="{{ $group->id }}" onclick="syncFromDrive(this)" {{ $group->google_drive_folder_id ? '' : 'disabled' }}>
+                            <i class="fas fa-download"></i> Sync from Drive
                         </button>
                     </td>
                 </tr>
@@ -338,8 +341,12 @@
     async function manualBackup(button) {
         const groupId = button.getAttribute('data-group-id');
         
+        if (!confirm('Bạn muốn backup tất cả files của group này lên Google Drive?')) {
+            return;
+        }
+        
         button.disabled = true;
-        button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Backing up...';
+        button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting...';
 
         try {
             const response = await fetch(`/admin/groups/manual-backup/${groupId}`, {
@@ -355,18 +362,58 @@
 
             if (data.success) {
                 const result = data.data;
-                alert(`Backup hoàn tất!\nThành công: ${result.success}\nThất bại: ${result.failed}\nTổng: ${result.total}`);
+                alert(`${data.message}\n\nTổng files: ${result.total}\nTrạng thái: ${result.status}\n\nQuá trình backup sẽ chạy background.\nKiểm tra log để theo dõi tiến trình.`);
                 
                 // Reload page to update folder ID if created
-                location.reload();
+                setTimeout(() => location.reload(), 2000);
             } else {
                 alert(data.message || 'Có lỗi xảy ra!');
+                button.disabled = false;
+                button.textContent = 'Manual Backup';
             }
         } catch (error) {
             alert('Lỗi kết nối: ' + error.message);
-        } finally {
             button.disabled = false;
             button.textContent = 'Manual Backup';
+        }
+    }
+
+    async function syncFromDrive(button) {
+        const groupId = button.getAttribute('data-group-id');
+        
+        if (!confirm('Bạn muốn sync files từ Google Drive về local?\n\nCảnh báo: Files local sẽ bị ghi đè nếu khác với version trên Drive!')) {
+            return;
+        }
+        
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
+
+        try {
+            const response = await fetch(`/admin/groups/sync-from-drive/${groupId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                const result = data.data;
+                alert(`${data.message}\n\nTổng files: ${result.total}\nTrạng thái: ${result.status}\n\nQuá trình sync sẽ chạy background.\nKiểm tra log để theo dõi tiến trình.`);
+                
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                alert(data.message || 'Có lỗi xảy ra!');
+                button.disabled = false;
+                button.textContent = 'Sync from Drive';
+            }
+        } catch (error) {
+            alert('Lỗi kết nối: ' + error.message);
+            button.disabled = false;
+            button.textContent = 'Sync from Drive';
         }
     }
 

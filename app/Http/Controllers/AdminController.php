@@ -365,24 +365,7 @@ class AdminController extends Controller
                 ]);
             }
 
-            // Get or create Google Drive folder for this group
-            $folderId = $group->google_drive_folder_id;
-            
-            if (!$folderId) {
-                $folderId = $googleDriveService->getOrCreateGroupFolder($group->id, $group->name);
-                
-                if ($folderId) {
-                    $group->google_drive_folder_id = $folderId;
-                    $group->save();
-                } else {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Không thể tạo folder trên Google Drive'
-                    ]);
-                }
-            }
-
-            // Backup all files in the group folder
+            // Count files to backup
             $groupFolder = 'profiles/' . $group->id;
             
             if (!Storage::disk('public')->exists($groupFolder)) {
@@ -393,36 +376,98 @@ class AdminController extends Controller
             }
             
             $files = Storage::disk('public')->files($groupFolder);
-            $successCount = 0;
-            $failCount = 0;
+            $totalFiles = count($files);
             
-            foreach ($files as $file) {
-                $fileName = basename($file);
-                $localPath = storage_path('app/public/' . $file);
-                
-                $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
-                
-                if ($result) {
-                    $successCount++;
-                } else {
-                    $failCount++;
-                }
+            if ($totalFiles == 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Không có file nào để backup'
+                ]);
             }
+
+            // Dispatch backup job to queue (async)
+            \App\Jobs\ManualBackupGroupToGoogleDrive::dispatch($group->id)
+                ->onQueue('backups');
 
             return response()->json([
                 'success' => true,
-                'message' => 'Backup hoàn tất',
+                'message' => "Đã bắt đầu backup {$totalFiles} files. Quá trình sẽ chạy background.",
                 'data' => [
-                    'success' => $successCount,
-                    'failed' => $failCount,
-                    'total' => count($files)
+                    'total' => $totalFiles,
+                    'status' => 'queued'
                 ]
             ]);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Lỗi khi backup: ' . $e->getMessage()
+                'message' => 'Lỗi khi khởi tạo backup: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function syncGroupFromDrive($id, Request $request) {
+        $loginUser = Auth::user();
+        if ($loginUser == null || $loginUser->role != 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không đủ quyền. Bạn cần có quyền admin!'
+            ]);
+        }
+
+        $group = Group::find($id);
+        if ($group == null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Group không tồn tại'
+            ]);
+        }
+
+        try {
+            $googleDriveService = app(\App\Services\GoogleDriveService::class);
+
+            if (!$googleDriveService->isConfigured()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Google Drive chưa được cấu hình'
+                ]);
+            }
+
+            if (!$group->google_drive_folder_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Group chưa có folder trên Google Drive. Hãy backup trước.'
+                ]);
+            }
+
+            // Get file count from Google Drive
+            $driveFiles = $googleDriveService->listFilesInFolder($group->google_drive_folder_id);
+            $totalFiles = count($driveFiles);
+
+            if ($totalFiles == 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Không có file nào trên Google Drive để sync'
+                ]);
+            }
+
+            // Dispatch sync job to queue (async)
+            \App\Jobs\SyncGroupFromGoogleDrive::dispatch($group->id)
+                ->onQueue('backups');
+
+            return response()->json([
+                'success' => true,
+                'message' => "Đã bắt đầu sync {$totalFiles} files từ Google Drive. Quá trình sẽ chạy background.",
+                'data' => [
+                    'total' => $totalFiles,
+                    'status' => 'queued'
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi khi khởi tạo sync: ' . $e->getMessage()
             ]);
         }
     }
