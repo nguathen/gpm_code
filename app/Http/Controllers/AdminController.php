@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\Profile;
 use App\Models\Setting;
 use App\Models\Group;
+use App\Models\BackupLog;
 use Illuminate\Support\Facades\Artisan;
 use stdClass;
 
@@ -385,8 +386,17 @@ class AdminController extends Controller
                 ]);
             }
 
-            // Dispatch backup job to queue (async)
-            \App\Jobs\ManualBackupGroupToGoogleDrive::dispatch($group->id)
+            // Create backup log entry
+            $backupLog = BackupLog::create([
+                'type' => 'manual',
+                'group_id' => $group->id,
+                'operation' => 'backup_to_drive',
+                'status' => 'queued',
+                'total_files' => $totalFiles
+            ]);
+
+            // Dispatch backup job to queue (async) with backup log ID
+            \App\Jobs\ManualBackupGroupToGoogleDrive::dispatch($group->id, $backupLog->id)
                 ->onQueue('backups');
 
             return response()->json([
@@ -394,7 +404,8 @@ class AdminController extends Controller
                 'message' => "Đã bắt đầu backup {$totalFiles} files. Quá trình sẽ chạy background.",
                 'data' => [
                     'total' => $totalFiles,
-                    'status' => 'queued'
+                    'status' => 'queued',
+                    'backup_log_id' => $backupLog->id
                 ]
             ]);
 
@@ -451,8 +462,17 @@ class AdminController extends Controller
                 ]);
             }
 
-            // Dispatch sync job to queue (async)
-            \App\Jobs\SyncGroupFromGoogleDrive::dispatch($group->id)
+            // Create backup log entry
+            $backupLog = BackupLog::create([
+                'type' => 'manual',
+                'group_id' => $group->id,
+                'operation' => 'sync_from_drive',
+                'status' => 'queued',
+                'total_files' => $totalFiles
+            ]);
+
+            // Dispatch sync job to queue (async) with backup log ID
+            \App\Jobs\SyncGroupFromGoogleDrive::dispatch($group->id, $backupLog->id)
                 ->onQueue('backups');
 
             return response()->json([
@@ -460,7 +480,8 @@ class AdminController extends Controller
                 'message' => "Đã bắt đầu sync {$totalFiles} files từ Google Drive. Quá trình sẽ chạy background.",
                 'data' => [
                     'total' => $totalFiles,
-                    'status' => 'queued'
+                    'status' => 'queued',
+                    'backup_log_id' => $backupLog->id
                 ]
             ]);
 
@@ -470,6 +491,97 @@ class AdminController extends Controller
                 'message' => 'Lỗi khi khởi tạo sync: ' . $e->getMessage()
             ]);
         }
+    }
+
+    public function getBackupLogs(Request $request) {
+        $query = BackupLog::with('group');
+
+        // Filter by group
+        if ($request->has('group_id') && $request->group_id != '') {
+            $query->where('group_id', $request->group_id);
+        }
+
+        // Filter by status
+        if ($request->has('status') && $request->status != '') {
+            $query->where('status', $request->status);
+        }
+
+        // Filter by operation
+        if ($request->has('operation') && $request->operation != '') {
+            $query->where('operation', $request->operation);
+        }
+
+        // Order by latest
+        $logs = $query->orderBy('created_at', 'desc')
+                     ->limit(100)
+                     ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $logs->map(function($log) {
+                return [
+                    'id' => $log->id,
+                    'type' => $log->type,
+                    'group_id' => $log->group_id,
+                    'group_name' => $log->group ? $log->group->name : 'N/A',
+                    'operation' => $log->operation,
+                    'status' => $log->status,
+                    'progress' => $log->getProgressPercentage(),
+                    'total_files' => $log->total_files,
+                    'processed_files' => $log->processed_files,
+                    'success_count' => $log->success_count,
+                    'skipped_count' => $log->skipped_count,
+                    'failed_count' => $log->failed_count,
+                    'total_size' => $log->total_size,
+                    'formatted_size' => $log->formatted_size,
+                    'duration' => $log->duration,
+                    'formatted_duration' => $log->formatted_duration,
+                    'error_message' => $log->error_message,
+                    'failed_files' => $log->failed_files,
+                    'created_at' => $log->created_at->format('Y-m-d H:i:s'),
+                    'started_at' => $log->started_at ? $log->started_at->format('Y-m-d H:i:s') : null,
+                    'completed_at' => $log->completed_at ? $log->completed_at->format('Y-m-d H:i:s') : null
+                ];
+            })
+        ]);
+    }
+
+    public function getBackupLog($id) {
+        $log = BackupLog::with('group')->find($id);
+
+        if (!$log) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Backup log không tồn tại'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'id' => $log->id,
+                'type' => $log->type,
+                'group_id' => $log->group_id,
+                'group_name' => $log->group ? $log->group->name : 'N/A',
+                'operation' => $log->operation,
+                'status' => $log->status,
+                'progress' => $log->getProgressPercentage(),
+                'total_files' => $log->total_files,
+                'processed_files' => $log->processed_files,
+                'success_count' => $log->success_count,
+                'skipped_count' => $log->skipped_count,
+                'failed_count' => $log->failed_count,
+                'total_size' => $log->total_size,
+                'formatted_size' => $log->formatted_size,
+                'duration' => $log->duration,
+                'formatted_duration' => $log->formatted_duration,
+                'error_message' => $log->error_message,
+                'failed_files' => $log->failed_files,
+                'created_at' => $log->created_at->format('Y-m-d H:i:s'),
+                'started_at' => $log->started_at ? $log->started_at->format('Y-m-d H:i:s') : null,
+                'completed_at' => $log->completed_at ? $log->completed_at->format('Y-m-d H:i:s') : null
+            ]
+        ]);
     }
 
     // Write .env

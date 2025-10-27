@@ -27,6 +27,11 @@ class Kernel extends ConsoleKernel
                  ->sundays()
                  ->at('02:00')
                  ->runInBackground();
+        
+        // Cleanup temp files every 6 hours
+        $schedule->command('googledrive:cleanup-temp --minutes=60')
+                 ->everySixHours()
+                 ->runInBackground();
     }
 
     /**

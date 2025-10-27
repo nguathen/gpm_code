@@ -45,10 +45,15 @@ Route::get('/admin/google-drive/reset', [AdminController::class, 'resetGoogleDri
 Route::post('/admin/groups/toggle-auto-backup/{id}', [AdminController::class, 'toggleGroupAutoBackup']);
 Route::post('/admin/groups/manual-backup/{id}', [AdminController::class, 'manualGroupBackup']);
 Route::post('/admin/groups/sync-from-drive/{id}', [AdminController::class, 'syncGroupFromDrive']);
+Route::get('/admin/backup-logs', [AdminController::class, 'getBackupLogs']);
+Route::get('/admin/backup-logs/{id}', [AdminController::class, 'getBackupLog']);
 
 Route::middleware(['auth:sanctum'])->get('/phpinfo', function(){
     phpinfo();
 });
+
+// Health check endpoint (no auth required for monitoring)
+Route::get('/health/google-drive', [App\Http\Controllers\HealthCheckController::class, 'googleDrive']);
 
 Route::middleware(['auth:sanctum'])->group(function(){
     Route::get('/auto-update', [UpdateController::class, 'updateFromRemoteZip']);

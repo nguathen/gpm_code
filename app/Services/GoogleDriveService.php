@@ -13,11 +13,19 @@ class GoogleDriveService
     protected $client;
     protected $service;
     protected $log;
+    protected $rateLimiter;
+    protected $requestCount = 0;
+    protected $requestWindowStart;
+    
+    // Rate limiting: 900 requests per 100 seconds (conservative)
+    const MAX_REQUESTS_PER_WINDOW = 900;
+    const RATE_LIMIT_WINDOW = 100; // seconds
 
     public function __construct()
     {
         // Initialize smart logger
         $this->log = new GoogleDriveLogger();
+        $this->requestWindowStart = time();
         
         $this->client = new Client();
         $this->client->setAuthConfig(storage_path('app/google-drive-credentials.json'));
@@ -426,7 +434,7 @@ class GoogleDriveService
      * @param int $maxRetries Maximum retry attempts per file
      * @return array ['success' => int, 'failed' => int, 'failed_files' => array]
      */
-    protected function downloadFilesParallel($files, $maxRetries = 3)
+    protected function downloadFilesParallel($files, $maxRetries = 3, $rateLimitRetry = 0)
     {
         $success = 0;
         $failed = 0;
@@ -434,6 +442,7 @@ class GoogleDriveService
 
         try {
             $this->refreshTokenIfNeeded();
+            $this->throttleRequest(); // Rate limiting
             
             $client = new \GuzzleHttp\Client();
             $promises = [];
@@ -442,13 +451,17 @@ class GoogleDriveService
             foreach ($files as $index => $file) {
                 $accessToken = $this->client->getAccessToken()['access_token'];
                 
+                // Dynamic timeout based on file size (min 30s, max 300s)
+                $fileSize = $file['size'] ?? 1024 * 1024; // Default 1MB
+                $timeout = min(max(30, ceil($fileSize / 1024 / 100)), 300); // ~100KB/s estimate
+                
                 $promises[$index] = $client->getAsync(
                     "https://www.googleapis.com/drive/v3/files/{$file['id']}?alt=media",
                     [
                         'headers' => [
                             'Authorization' => 'Bearer ' . $accessToken,
                         ],
-                        'timeout' => 60,
+                        'timeout' => $timeout,
                         'connect_timeout' => 10,
                     ]
                 );
@@ -470,7 +483,7 @@ class GoogleDriveService
                         // Verify content MD5 BEFORE saving
                         $downloadedMd5 = md5($content);
                         if (isset($file['md5']) && $file['md5'] !== $downloadedMd5) {
-                            $this->logger->warning("MD5 mismatch for {$file['name']}. Expected: {$file['md5']}, Got: {$downloadedMd5}");
+                            $this->log->warning("MD5 mismatch for {$file['name']}. Expected: {$file['md5']}, Got: {$downloadedMd5}");
                             $needsRetry[] = $file;
                             continue;
                         }
@@ -548,8 +561,26 @@ class GoogleDriveService
                 }
             }
 
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            // Handle 429 Rate Limit
+            if ($e->getCode() == 429 && $rateLimitRetry < 3) {
+                $this->handleRateLimitError($rateLimitRetry + 1);
+                return $this->downloadFilesParallel($files, $maxRetries, $rateLimitRetry + 1);
+            }
+            
+            $this->log->error('Parallel download error: ' . $e->getMessage());
+            // Fallback to sequential download with verification
+            foreach ($files as $file) {
+                $result = $this->downloadFileWithVerification($file['id'], $file['path'], $file['md5'] ?? null);
+                if ($result) {
+                    $success++;
+                } else {
+                    $failed++;
+                    $failedFiles[] = $file['name'];
+                }
+            }
         } catch (\Exception $e) {
-            Log::error('Parallel download error: ' . $e->getMessage());
+            $this->log->error('Parallel download error: ' . $e->getMessage());
             // Fallback to sequential download with verification
             foreach ($files as $file) {
                 $result = $this->downloadFileWithVerification($file['id'], $file['path'], $file['md5'] ?? null);
@@ -696,14 +727,16 @@ class GoogleDriveService
      *
      * @param string $folderId Google Drive folder ID
      * @param string $localPath Local path to sync to
+     * @param callable|null $progressCallback Callback function(processed, total, success, skipped, failed)
      * @param int $concurrency Number of concurrent downloads (default: 5)
      * @return array ['downloaded' => int, 'skipped' => int, 'failed' => int]
      */
-    public function syncFromGoogleDrive($folderId, $localPath, $concurrency = 5)
+    public function syncFromGoogleDrive($folderId, $localPath, $progressCallback = null, $concurrency = 5)
     {
         $downloaded = 0;
         $skipped = 0;
         $failed = 0;
+        $failedFiles = [];
 
         try {
             // Ensure local directory exists
@@ -711,13 +744,17 @@ class GoogleDriveService
                 mkdir($localPath, 0755, true);
             }
 
+            // Cleanup old temp files first
+            $this->cleanupTempFiles(60);
+
             // Get all files from Google Drive
             $startTime = $this->log->startTimer();
             $driveFiles = $this->listFilesInFolder($folderId);
+            $totalFiles = count($driveFiles);
             
             $this->log->info("Starting sync from Google Drive folder", [
                 'folder_id' => substr($folderId, 0, 20) . '...',
-                'total_files' => count($driveFiles),
+                'total_files' => $totalFiles,
                 'concurrency' => $concurrency
             ]);
 
@@ -736,6 +773,12 @@ class GoogleDriveService
                     if ($localMd5 === $remoteMd5) {
                         $this->log->debug("Skipped (unchanged): {$fileName}");
                         $skipped++;
+                        
+                        // Call progress callback
+                        if (is_callable($progressCallback)) {
+                            $progressCallback($downloaded + $skipped + $failed, $totalFiles, $downloaded, $skipped, $failed);
+                        }
+                        
                         continue;
                     }
 
@@ -754,12 +797,19 @@ class GoogleDriveService
 
             // Second pass: Download files concurrently in chunks
             if (!empty($filesToDownload)) {
+                // Check disk space before downloading
+                $totalSize = $this->calculateTotalSize($filesToDownload);
+                if (!$this->checkDiskSpace($totalSize * 1.2)) { // 20% buffer
+                    throw new \Exception("Insufficient disk space for sync operation");
+                }
+                
                 $chunks = array_chunk($filesToDownload, $concurrency);
                 $totalToDownload = count($filesToDownload);
                 $currentProgress = 0;
 
                 $this->log->info("Starting parallel download", [
                     'total_files' => $totalToDownload,
+                    'total_size' => $this->formatBytes($totalSize),
                     'chunk_size' => $concurrency,
                     'total_chunks' => count($chunks)
                 ]);
@@ -772,6 +822,7 @@ class GoogleDriveService
                     
                     $downloaded += $result['success'];
                     $failed += $result['failed'];
+                    $failedFiles = array_merge($failedFiles, $result['failed_files'] ?? []);
                     $currentProgress += count($chunk);
                     
                     $percentage = round(($currentProgress / $totalToDownload) * 100, 1);
@@ -782,6 +833,11 @@ class GoogleDriveService
                         'percentage' => $percentage,
                         'chunk_duration' => round($chunkDuration, 2) . 's'
                     ]);
+                    
+                    // Call progress callback
+                    if (is_callable($progressCallback)) {
+                        $progressCallback($downloaded + $skipped + $failed, $totalFiles, $downloaded, $skipped, $failed);
+                    }
                 }
             }
 
@@ -865,6 +921,153 @@ class GoogleDriveService
         $tokenPath = storage_path('app/google-drive-token.json');
         
         return file_exists($credentialsPath) && file_exists($tokenPath);
+    }
+
+    /**
+     * Rate limiter - throttle requests to stay within Google API quotas
+     */
+    protected function throttleRequest()
+    {
+        $this->requestCount++;
+        
+        // Check if we need to reset the window
+        $elapsed = time() - $this->requestWindowStart;
+        if ($elapsed >= self::RATE_LIMIT_WINDOW) {
+            $this->requestCount = 1;
+            $this->requestWindowStart = time();
+            return;
+        }
+        
+        // If we're approaching the limit, sleep
+        if ($this->requestCount >= self::MAX_REQUESTS_PER_WINDOW) {
+            $sleepTime = self::RATE_LIMIT_WINDOW - $elapsed + 1;
+            $this->log->warning("Rate limit approaching, sleeping for {$sleepTime}s", [
+                'requests' => $this->requestCount,
+                'window' => $elapsed . 's'
+            ]);
+            sleep($sleepTime);
+            $this->requestCount = 1;
+            $this->requestWindowStart = time();
+        }
+    }
+
+    /**
+     * Handle 429 Rate Limit errors with exponential backoff
+     */
+    protected function handleRateLimitError($attempt = 1, $maxRetries = 5)
+    {
+        if ($attempt > $maxRetries) {
+            throw new \Exception("Rate limit exceeded after {$maxRetries} retries");
+        }
+        
+        $delay = min(pow(2, $attempt) * 10, 300); // Max 5 minutes
+        $this->log->warning("Rate limit (429) hit, backing off", [
+            'attempt' => $attempt,
+            'delay' => $delay . 's'
+        ]);
+        sleep($delay);
+    }
+
+    /**
+     * Check available disk space before sync
+     * 
+     * @param int $requiredBytes
+     * @return bool
+     */
+    protected function checkDiskSpace($requiredBytes = null)
+    {
+        $path = storage_path('app/public');
+        $freeSpace = disk_free_space($path);
+        $totalSpace = disk_total_space($path);
+        
+        // Need at least 500MB free or 5% of total space
+        $minFreeSpace = max(500 * 1024 * 1024, $totalSpace * 0.05);
+        
+        if ($requiredBytes && $freeSpace < $requiredBytes) {
+            $this->log->error("Insufficient disk space", [
+                'required' => $this->formatBytes($requiredBytes),
+                'available' => $this->formatBytes($freeSpace)
+            ]);
+            return false;
+        }
+        
+        if ($freeSpace < $minFreeSpace) {
+            $this->log->error("Low disk space", [
+                'available' => $this->formatBytes($freeSpace),
+                'minimum' => $this->formatBytes($minFreeSpace),
+                'usage_percent' => round((($totalSpace - $freeSpace) / $totalSpace) * 100, 2) . '%'
+            ]);
+            return false;
+        }
+        
+        $this->log->debug("Disk space OK", [
+            'available' => $this->formatBytes($freeSpace),
+            'total' => $this->formatBytes($totalSpace)
+        ]);
+        
+        return true;
+    }
+
+    /**
+     * Cleanup orphaned temp files
+     */
+    public function cleanupTempFiles($olderThanMinutes = 60)
+    {
+        $path = storage_path('app/public/profiles');
+        $patterns = ['*.tmp', '*.backup'];
+        $cutoffTime = time() - ($olderThanMinutes * 60);
+        $cleaned = 0;
+        $freedSpace = 0;
+        
+        foreach ($patterns as $pattern) {
+            $files = glob($path . '/*/' . $pattern);
+            
+            foreach ($files as $file) {
+                if (filemtime($file) < $cutoffTime) {
+                    $size = filesize($file);
+                    if (unlink($file)) {
+                        $cleaned++;
+                        $freedSpace += $size;
+                        $this->log->debug("Cleaned temp file: " . basename($file));
+                    }
+                }
+            }
+        }
+        
+        if ($cleaned > 0) {
+            $this->log->info("Temp file cleanup completed", [
+                'cleaned' => $cleaned,
+                'freed' => $this->formatBytes($freedSpace)
+            ]);
+        }
+        
+        return ['cleaned' => $cleaned, 'freed' => $freedSpace];
+    }
+
+    /**
+     * Format bytes to human readable
+     */
+    protected function formatBytes($bytes, $precision = 2)
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        
+        for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
+            $bytes /= 1024;
+        }
+        
+        return round($bytes, $precision) . ' ' . $units[$i];
+    }
+
+    /**
+     * Calculate total size of files to download
+     */
+    protected function calculateTotalSize($files)
+    {
+        $total = 0;
+        foreach ($files as $file) {
+            $total += $file['size'] ?? 0;
+        }
+        return $total;
     }
 }
 

@@ -208,48 +208,112 @@
 
         <br /><br />
         <h3 style="color: #0080C0">Google Drive Backup Manager</h3><br />
-        <div class="alert alert-info">
-            <strong>Hướng dẫn:</strong> Bật Auto Backup để tự động backup files lên Google Drive khi có thay đổi. 
-            Hoặc sử dụng Manual Backup để backup thủ công toàn bộ files của group.
+        
+        <!-- Tab Navigation -->
+        <ul class="nav nav-tabs mb-3" id="backupTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="groups-tab" data-bs-toggle="tab" data-bs-target="#groups" type="button" role="tab">
+                    Groups Management
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab" onclick="loadBackupHistory()">
+                    Backup History
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content" id="backupTabContent">
+            <!-- Groups Management Tab -->
+            <div class="tab-pane fade show active" id="groups" role="tabpanel">
+                <div class="alert alert-info">
+                    <strong>Hướng dẫn:</strong> Bật Auto Backup để tự động backup files lên Google Drive khi có thay đổi. 
+                    Hoặc sử dụng Manual Backup để backup thủ công toàn bộ files của group.
+                </div>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Group Name</th>
+                            <th>Auto Backup</th>
+                            <th>Drive Folder ID</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($groups as $group)
+                        <tr id="group-{{ $group->id }}">
+                            <td>{{ $group->name }}</td>
+                            <td>
+                                <span class="badge bg-{{ $group->auto_backup ? 'success' : 'secondary' }}" id="status-{{ $group->id }}">
+                                    {{ $group->auto_backup ? 'ON' : 'OFF' }}
+                                </span>
+                            </td>
+                            <td>
+                                <small class="text-muted" id="folder-{{ $group->id }}">
+                                    {{ $group->google_drive_folder_id ?? 'Chưa tạo' }}
+                                </small>
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-primary" data-group-id="{{ $group->id }}" data-auto-backup="{{ $group->auto_backup ? 1 : 0 }}" onclick="toggleAutoBackup(this)">
+                                    {{ $group->auto_backup ? 'Tắt' : 'Bật' }} Auto Backup
+                                </button>
+                                <button class="btn btn-sm btn-success" data-group-id="{{ $group->id }}" onclick="manualBackup(this)">
+                                    <i class="fas fa-upload"></i> Backup to Drive
+                                </button>
+                                <button class="btn btn-sm btn-info" data-group-id="{{ $group->id }}" onclick="syncFromDrive(this)" {{ $group->google_drive_folder_id ? '' : 'disabled' }}>
+                                    <i class="fas fa-download"></i> Sync from Drive
+                                </button>
+                            </td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Backup History Tab -->
+            <div class="tab-pane fade" id="history" role="tabpanel">
+                <!-- Filters -->
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <select id="filterGroup" class="form-control form-control-sm" onchange="loadBackupHistory()">
+                            <option value="">All Groups</option>
+                            @foreach ($groups as $group)
+                            <option value="{{ $group->id }}">{{ $group->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select id="filterStatus" class="form-control form-control-sm" onchange="loadBackupHistory()">
+                            <option value="">All Status</option>
+                            <option value="queued">Queued</option>
+                            <option value="running">Running</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select id="filterOperation" class="form-control form-control-sm" onchange="loadBackupHistory()">
+                            <option value="">All Operations</option>
+                            <option value="backup_to_drive">Backup to Drive</option>
+                            <option value="sync_from_drive">Sync from Drive</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-sm btn-primary" onclick="loadBackupHistory()">
+                            <i class="fas fa-refresh"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- History Table -->
+                <div id="historyTableContainer">
+                    <div class="text-center">
+                        <span class="spinner-border spinner-border-sm"></span> Loading...
+                    </div>
+                </div>
+            </div>
         </div>
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>Group Name</th>
-                    <th>Auto Backup</th>
-                    <th>Drive Folder ID</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach ($groups as $group)
-                <tr id="group-{{ $group->id }}">
-                    <td>{{ $group->name }}</td>
-                    <td>
-                        <span class="badge bg-{{ $group->auto_backup ? 'success' : 'secondary' }}" id="status-{{ $group->id }}">
-                            {{ $group->auto_backup ? 'ON' : 'OFF' }}
-                        </span>
-                    </td>
-                    <td>
-                        <small class="text-muted" id="folder-{{ $group->id }}">
-                            {{ $group->google_drive_folder_id ?? 'Chưa tạo' }}
-                        </small>
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-primary" data-group-id="{{ $group->id }}" data-auto-backup="{{ $group->auto_backup ? 1 : 0 }}" onclick="toggleAutoBackup(this)">
-                            {{ $group->auto_backup ? 'Tắt' : 'Bật' }} Auto Backup
-                        </button>
-                        <button class="btn btn-sm btn-success" data-group-id="{{ $group->id }}" onclick="manualBackup(this)">
-                            <i class="fas fa-upload"></i> Backup to Drive
-                        </button>
-                        <button class="btn btn-sm btn-info" data-group-id="{{ $group->id }}" onclick="syncFromDrive(this)" {{ $group->google_drive_folder_id ? '' : 'disabled' }}>
-                            <i class="fas fa-download"></i> Sync from Drive
-                        </button>
-                    </td>
-                </tr>
-                @endforeach
-            </tbody>
-        </table>
 
         <br /><br />
         <h3 style="color: #0080C0">User manager</h3><br />
@@ -490,6 +554,164 @@
             alert('Lỗi: ' + error.message);
         }
     }
+
+    // Backup History Functions
+    let historyRefreshInterval = null;
+    let activeBackupLogs = new Set();
+
+    async function loadBackupHistory() {
+        try {
+            const groupId = document.getElementById('filterGroup')?.value || '';
+            const status = document.getElementById('filterStatus')?.value || '';
+            const operation = document.getElementById('filterOperation')?.value || '';
+
+            const params = new URLSearchParams();
+            if (groupId) params.append('group_id', groupId);
+            if (status) params.append('status', status);
+            if (operation) params.append('operation', operation);
+
+            const response = await fetch(`/admin/backup-logs?${params.toString()}`);
+            const data = await response.json();
+
+            if (data.success) {
+                renderBackupHistory(data.data);
+                
+                // Track active (running/queued) backups
+                activeBackupLogs.clear();
+                data.data.forEach(log => {
+                    if (log.status === 'running' || log.status === 'queued') {
+                        activeBackupLogs.add(log.id);
+                    }
+                });
+
+                // Auto refresh if there are active backups
+                if (activeBackupLogs.size > 0 && !historyRefreshInterval) {
+                    historyRefreshInterval = setInterval(loadBackupHistory, 2000);
+                } else if (activeBackupLogs.size === 0 && historyRefreshInterval) {
+                    clearInterval(historyRefreshInterval);
+                    historyRefreshInterval = null;
+                }
+            }
+        } catch (error) {
+            console.error('Error loading backup history:', error);
+        }
+    }
+
+    function renderBackupHistory(logs) {
+        const container = document.getElementById('historyTableContainer');
+
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="alert alert-info">Không có backup history nào.</div>';
+            return;
+        }
+
+        let html = `
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Group</th>
+                        <th>Operation</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th>Files</th>
+                        <th>Size</th>
+                        <th>Duration</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        logs.forEach(log => {
+            const statusBadge = getStatusBadge(log.status);
+            const progressBar = getProgressBar(log);
+            const operationLabel = log.operation === 'backup_to_drive' ? 'Backup to Drive' : 'Sync from Drive';
+            
+            html += `
+                <tr id="log-${log.id}">
+                    <td><small>${log.created_at}</small></td>
+                    <td>${log.group_name}</td>
+                    <td><small>${operationLabel}</small></td>
+                    <td>${statusBadge}</td>
+                    <td style="min-width: 150px;">${progressBar}</td>
+                    <td>
+                        <small>
+                            ${log.processed_files || 0}/${log.total_files || 0}
+                            ${log.failed_count > 0 ? `<span class="text-danger">(${log.failed_count} failed)</span>` : ''}
+                        </small>
+                    </td>
+                    <td><small>${log.formatted_size || 'N/A'}</small></td>
+                    <td><small>${log.formatted_duration || 'N/A'}</small></td>
+                    <td>
+                        ${log.failed_files && log.failed_files.length > 0 ? 
+                            `<button class="btn btn-xs btn-danger" onclick="showFailedFiles(${log.id})">
+                                <small>View Errors</small>
+                            </button>` : ''}
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    function getStatusBadge(status) {
+        const badges = {
+            'queued': '<span class="badge bg-secondary">Queued</span>',
+            'running': '<span class="badge bg-primary">Running</span>',
+            'completed': '<span class="badge bg-success">Completed</span>',
+            'failed': '<span class="badge bg-danger">Failed</span>'
+        };
+        return badges[status] || status;
+    }
+
+    function getProgressBar(log) {
+        const progress = log.progress || 0;
+        let colorClass = 'bg-primary';
+        
+        if (log.status === 'completed') {
+            colorClass = log.failed_count > 0 ? 'bg-warning' : 'bg-success';
+        } else if (log.status === 'failed') {
+            colorClass = 'bg-danger';
+        }
+
+        return `
+            <div class="progress" style="height: 20px;">
+                <div class="progress-bar ${colorClass}" role="progressbar" 
+                     style="width: ${progress}%;" 
+                     aria-valuenow="${progress}" 
+                     aria-valuemin="0" 
+                     aria-valuemax="100">
+                    ${progress}%
+                </div>
+            </div>
+        `;
+    }
+
+    async function showFailedFiles(logId) {
+        try {
+            const response = await fetch(`/admin/backup-logs/${logId}`);
+            const data = await response.json();
+
+            if (data.success && data.data.failed_files && data.data.failed_files.length > 0) {
+                const failedList = data.data.failed_files.join('\n');
+                alert(`Failed Files:\n\n${failedList}`);
+            } else {
+                alert('Không có file lỗi nào.');
+            }
+        } catch (error) {
+            alert('Lỗi khi load thông tin: ' + error.message);
+        }
+    }
+
+    // Cleanup interval on page unload
+    window.addEventListener('beforeunload', () => {
+        if (historyRefreshInterval) {
+            clearInterval(historyRefreshInterval);
+        }
+    });
 </script>
 
 </html>
