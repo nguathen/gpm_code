@@ -12,9 +12,13 @@ class GoogleDriveService
 {
     protected $client;
     protected $service;
+    protected $log;
 
     public function __construct()
     {
+        // Initialize smart logger
+        $this->log = new GoogleDriveLogger();
+        
         $this->client = new Client();
         $this->client->setAuthConfig(storage_path('app/google-drive-credentials.json'));
         $this->client->addScope(Drive::DRIVE_FILE);
@@ -397,7 +401,7 @@ class GoogleDriveService
 
             file_put_contents($destinationPath, $content);
             
-            Log::info("Downloaded file from Google Drive: {$fileId} to {$destinationPath}");
+            Log::debug("Downloaded file from Google Drive: " . basename($destinationPath));
             return true;
 
         } catch (\Google\Service\Exception $e) {
@@ -413,6 +417,232 @@ class GoogleDriveService
             Log::error('Google Drive download error: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Download multiple files concurrently with integrity verification
+     *
+     * @param array $files Array of ['id' => fileId, 'path' => destinationPath, 'name' => fileName, 'md5' => expectedMd5]
+     * @param int $maxRetries Maximum retry attempts per file
+     * @return array ['success' => int, 'failed' => int, 'failed_files' => array]
+     */
+    protected function downloadFilesParallel($files, $maxRetries = 3)
+    {
+        $success = 0;
+        $failed = 0;
+        $failedFiles = [];
+
+        try {
+            $this->refreshTokenIfNeeded();
+            
+            $client = new \GuzzleHttp\Client();
+            $promises = [];
+            
+            // Create promises for each file download
+            foreach ($files as $index => $file) {
+                $accessToken = $this->client->getAccessToken()['access_token'];
+                
+                $promises[$index] = $client->getAsync(
+                    "https://www.googleapis.com/drive/v3/files/{$file['id']}?alt=media",
+                    [
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $accessToken,
+                        ],
+                        'timeout' => 60,
+                        'connect_timeout' => 10,
+                    ]
+                );
+            }
+
+            // Wait for all downloads to complete
+            $results = \GuzzleHttp\Promise\Utils::settle($promises)->wait();
+
+            // Process results and save files with integrity check
+            $needsRetry = [];
+            
+            foreach ($results as $index => $result) {
+                $file = $files[$index];
+                
+                if ($result['state'] === 'fulfilled') {
+                    try {
+                        $content = $result['value']->getBody()->getContents();
+                        
+                        // Verify content MD5 BEFORE saving
+                        $downloadedMd5 = md5($content);
+                        if (isset($file['md5']) && $file['md5'] !== $downloadedMd5) {
+                            $this->logger->warning("MD5 mismatch for {$file['name']}. Expected: {$file['md5']}, Got: {$downloadedMd5}");
+                            $needsRetry[] = $file;
+                            continue;
+                        }
+                        
+                        // Ensure directory exists
+                        $directory = dirname($file['path']);
+                        if (!is_dir($directory)) {
+                            mkdir($directory, 0755, true);
+                        }
+                        
+                        // Atomic write: write to temp file first
+                        $tempPath = $file['path'] . '.tmp';
+                        file_put_contents($tempPath, $content);
+                        
+                        // Verify written file MD5
+                        $writtenMd5 = md5_file($tempPath);
+                        if ($writtenMd5 !== $downloadedMd5) {
+                            Log::error("Write verification failed for {$file['name']}");
+                            unlink($tempPath);
+                            $needsRetry[] = $file;
+                            continue;
+                        }
+                        
+                        // Move temp to final location (atomic)
+                        if (file_exists($file['path'])) {
+                            // Backup existing file
+                            $backupPath = $file['path'] . '.backup';
+                            rename($file['path'], $backupPath);
+                            
+                            if (rename($tempPath, $file['path'])) {
+                                unlink($backupPath); // Remove backup on success
+                                $success++;
+                                Log::debug("Downloaded & verified (parallel): {$file['name']} (MD5: {$downloadedMd5})");
+                            } else {
+                                // Restore backup on failure
+                                rename($backupPath, $file['path']);
+                                unlink($tempPath);
+                                $needsRetry[] = $file;
+                            }
+                        } else {
+                            // No existing file, just rename
+                            if (rename($tempPath, $file['path'])) {
+                                $success++;
+                                Log::debug("Downloaded & verified (parallel): {$file['name']} (MD5: {$downloadedMd5})");
+                            } else {
+                                unlink($tempPath);
+                                $needsRetry[] = $file;
+                            }
+                        }
+                        
+                    } catch (\Exception $e) {
+                        Log::error("Failed to process file {$file['name']}: " . $e->getMessage());
+                        $needsRetry[] = $file;
+                    }
+                } else {
+                    $reason = $result['reason']->getMessage() ?? 'Unknown error';
+                    Log::warning("Download failed for {$file['name']}: {$reason}");
+                    $needsRetry[] = $file;
+                }
+            }
+
+            // Retry failed files (with exponential backoff)
+            if (!empty($needsRetry) && $maxRetries > 0) {
+                Log::info("Retrying " . count($needsRetry) . " failed files (attempt " . (4 - $maxRetries) . "/3)...");
+                sleep(1 * (4 - $maxRetries)); // Exponential backoff: 1s, 2s, 3s
+                
+                $retryResult = $this->downloadFilesParallel($needsRetry, $maxRetries - 1);
+                $success += $retryResult['success'];
+                $failed += $retryResult['failed'];
+                $failedFiles = array_merge($failedFiles, $retryResult['failed_files']);
+            } else {
+                $failed += count($needsRetry);
+                foreach ($needsRetry as $file) {
+                    $failedFiles[] = $file['name'];
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Parallel download error: ' . $e->getMessage());
+            // Fallback to sequential download with verification
+            foreach ($files as $file) {
+                $result = $this->downloadFileWithVerification($file['id'], $file['path'], $file['md5'] ?? null);
+                if ($result) {
+                    $success++;
+                } else {
+                    $failed++;
+                    $failedFiles[] = $file['name'];
+                }
+            }
+        }
+
+        return [
+            'success' => $success, 
+            'failed' => $failed,
+            'failed_files' => $failedFiles
+        ];
+    }
+
+    /**
+     * Download a single file with full verification and retry
+     *
+     * @param string $fileId
+     * @param string $destinationPath
+     * @param string|null $expectedMd5
+     * @param int $maxRetries
+     * @return bool
+     */
+    protected function downloadFileWithVerification($fileId, $destinationPath, $expectedMd5 = null, $maxRetries = 3)
+    {
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                $this->refreshTokenIfNeeded();
+
+                $response = $this->service->files->get($fileId, ['alt' => 'media']);
+                $content = $response->getBody()->getContents();
+
+                // Verify MD5
+                $downloadedMd5 = md5($content);
+                if ($expectedMd5 && $expectedMd5 !== $downloadedMd5) {
+                    Log::warning("MD5 mismatch (attempt {$attempt}/{$maxRetries}). Expected: {$expectedMd5}, Got: {$downloadedMd5}");
+                    if ($attempt < $maxRetries) {
+                        sleep($attempt); // Backoff
+                        continue;
+                    }
+                    return false;
+                }
+
+                // Atomic write
+                $directory = dirname($destinationPath);
+                if (!is_dir($directory)) {
+                    mkdir($directory, 0755, true);
+                }
+
+                $tempPath = $destinationPath . '.tmp';
+                file_put_contents($tempPath, $content);
+
+                if (md5_file($tempPath) === $downloadedMd5) {
+                    if (file_exists($destinationPath)) {
+                        $backupPath = $destinationPath . '.backup';
+                        rename($destinationPath, $backupPath);
+                        
+                        if (rename($tempPath, $destinationPath)) {
+                            unlink($backupPath);
+                            Log::debug("Downloaded & verified: " . basename($destinationPath));
+                            return true;
+                        } else {
+                            rename($backupPath, $destinationPath);
+                            unlink($tempPath);
+                        }
+                    } else {
+                        if (rename($tempPath, $destinationPath)) {
+                            Log::debug("Downloaded & verified: " . basename($destinationPath));
+                            return true;
+                        }
+                    }
+                } else {
+                    unlink($tempPath);
+                }
+
+                if ($attempt < $maxRetries) {
+                    sleep($attempt);
+                }
+
+            } catch (\Exception $e) {
+                Log::error("Download attempt {$attempt} failed: " . $e->getMessage());
+                if ($attempt < $maxRetries) {
+                    sleep($attempt);
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -462,13 +692,14 @@ class GoogleDriveService
     }
 
     /**
-     * Sync files from Google Drive to local storage
+     * Sync files from Google Drive to local storage (with concurrent downloads)
      *
      * @param string $folderId Google Drive folder ID
      * @param string $localPath Local path to sync to
+     * @param int $concurrency Number of concurrent downloads (default: 5)
      * @return array ['downloaded' => int, 'skipped' => int, 'failed' => int]
      */
-    public function syncFromGoogleDrive($folderId, $localPath)
+    public function syncFromGoogleDrive($folderId, $localPath, $concurrency = 5)
     {
         $downloaded = 0;
         $skipped = 0;
@@ -481,10 +712,18 @@ class GoogleDriveService
             }
 
             // Get all files from Google Drive
+            $startTime = $this->log->startTimer();
             $driveFiles = $this->listFilesInFolder($folderId);
             
-            Log::info("Starting sync from Google Drive folder {$folderId}. Found " . count($driveFiles) . " files.");
+            $this->log->info("Starting sync from Google Drive folder", [
+                'folder_id' => substr($folderId, 0, 20) . '...',
+                'total_files' => count($driveFiles),
+                'concurrency' => $concurrency
+            ]);
 
+            // First pass: Check which files need to be downloaded
+            $filesToDownload = [];
+            
             foreach ($driveFiles as $driveFile) {
                 $fileName = $driveFile['name'];
                 $localFilePath = $localPath . '/' . $fileName;
@@ -495,27 +734,72 @@ class GoogleDriveService
                     $remoteMd5 = $driveFile['md5'];
 
                     if ($localMd5 === $remoteMd5) {
-                        Log::debug("File unchanged, skipping download: {$fileName}");
+                        $this->log->debug("Skipped (unchanged): {$fileName}");
                         $skipped++;
                         continue;
                     }
 
-                    Log::debug("File changed on Google Drive, downloading: {$fileName}");
+                    $this->log->debug("Queued (changed): {$fileName}");
                 } else {
-                    Log::debug("New file on Google Drive, downloading: {$fileName}");
+                    $this->log->debug("Queued (new): {$fileName}");
                 }
 
-                // Download file
-                $result = $this->downloadFile($driveFile['id'], $localFilePath);
-                
-                if ($result) {
-                    $downloaded++;
-                } else {
-                    $failed++;
+                $filesToDownload[] = [
+                    'id' => $driveFile['id'],
+                    'name' => $fileName,
+                    'path' => $localFilePath,
+                    'md5' => $driveFile['md5'] // For verification
+                ];
+            }
+
+            // Second pass: Download files concurrently in chunks
+            if (!empty($filesToDownload)) {
+                $chunks = array_chunk($filesToDownload, $concurrency);
+                $totalToDownload = count($filesToDownload);
+                $currentProgress = 0;
+
+                $this->log->info("Starting parallel download", [
+                    'total_files' => $totalToDownload,
+                    'chunk_size' => $concurrency,
+                    'total_chunks' => count($chunks)
+                ]);
+
+                foreach ($chunks as $chunkIndex => $chunk) {
+                    // Download chunk in parallel
+                    $chunkStart = $this->log->startTimer();
+                    $result = $this->downloadFilesParallel($chunk);
+                    $chunkDuration = $this->log->endTimer($chunkStart, "Chunk " . ($chunkIndex + 1));
+                    
+                    $downloaded += $result['success'];
+                    $failed += $result['failed'];
+                    $currentProgress += count($chunk);
+                    
+                    $percentage = round(($currentProgress / $totalToDownload) * 100, 1);
+                    
+                    $this->log->debug("Chunk completed", [
+                        'chunk' => ($chunkIndex + 1) . '/' . count($chunks),
+                        'progress' => "{$currentProgress}/{$totalToDownload}",
+                        'percentage' => $percentage,
+                        'chunk_duration' => round($chunkDuration, 2) . 's'
+                    ]);
                 }
             }
 
-            Log::info("Sync completed from Google Drive. Downloaded: {$downloaded}, Skipped: {$skipped}, Failed: {$failed}");
+            $totalDuration = $this->log->endTimer($startTime, "Sync operation");
+
+            // Final summary with failed files list
+            $this->log->summary('Sync from Drive', [
+                'downloaded' => $downloaded,
+                'skipped' => $skipped,
+                'failed' => $failed,
+                'total' => count($driveFiles),
+                'success_rate' => $driveFiles ? round((($downloaded + $skipped) / count($driveFiles)) * 100, 2) . '%' : '100%',
+                'duration' => round($totalDuration, 2) . 's'
+            ]);
+            
+            if ($failed > 0 && !empty($failedFiles)) {
+                $this->log->error("Failed files: " . implode(', ', array_slice($failedFiles, 0, 10)) . ($failed > 10 ? "... and " . ($failed - 10) . " more" : ""));
+            }
 
         } catch (\Exception $e) {
             Log::error('Sync from Google Drive error: ' . $e->getMessage());
@@ -525,7 +809,9 @@ class GoogleDriveService
             'downloaded' => $downloaded,
             'skipped' => $skipped,
             'failed' => $failed,
-            'total' => count($driveFiles ?? [])
+            'failed_files' => $failedFiles ?? [],
+            'total' => count($driveFiles ?? []),
+            'success_rate' => $driveFiles ? round((($downloaded + $skipped) / count($driveFiles)) * 100, 2) : 100
         ];
     }
 

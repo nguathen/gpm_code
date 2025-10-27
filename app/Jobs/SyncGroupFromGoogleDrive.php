@@ -77,7 +77,15 @@ class SyncGroupFromGoogleDrive implements ShouldQueue
                 $localPath
             );
 
-            Log::info("Sync completed for group {$group->id}: {$result['downloaded']} downloaded, {$result['skipped']} skipped, {$result['failed']} failed out of {$result['total']} total");
+            if ($result['failed'] > 0) {
+                Log::error("Sync completed for group {$group->id} with failures: {$result['downloaded']} downloaded, {$result['skipped']} skipped, {$result['failed']} failed out of {$result['total']} total");
+                Log::error("Success rate: {$result['success_rate']}%");
+                if (!empty($result['failed_files'])) {
+                    Log::error("Failed files for group {$group->id}: " . implode(', ', $result['failed_files']));
+                }
+            } else {
+                Log::info("Sync completed successfully for group {$group->id}: {$result['downloaded']} downloaded, {$result['skipped']} skipped, 0 failed out of {$result['total']} total (100% success)");
+            }
 
         } catch (\Exception $e) {
             Log::error("Sync job failed for group {$this->groupId}: " . $e->getMessage());

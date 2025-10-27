@@ -20,6 +20,13 @@ class Kernel extends ConsoleKernel
                  ->everySixHours()
                  ->withoutOverlapping()
                  ->runInBackground();
+        
+        // Clean old logs weekly (keep 30 days)
+        $schedule->command('logs:clean --days=30')
+                 ->weekly()
+                 ->sundays()
+                 ->at('02:00')
+                 ->runInBackground();
     }
 
     /**

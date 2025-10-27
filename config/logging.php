@@ -53,7 +53,7 @@ return [
     'channels' => [
         'stack' => [
             'driver' => 'stack',
-            'channels' => ['single'],
+            'channels' => ['daily'],
             'ignore_exceptions' => false,
         ],
 
@@ -66,8 +66,32 @@ return [
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => 7,
+        ],
+
+        // Dedicated channel for Google Drive operations
+        'google_drive' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/google-drive.log'),
+            'level' => env('GOOGLE_DRIVE_LOG_LEVEL', 'info'),
+            'days' => 7,
+        ],
+
+        // Dedicated channel for backup operations
+        'backup' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/backup.log'),
+            'level' => env('BACKUP_LOG_LEVEL', 'info'),
             'days' => 14,
+        ],
+
+        // Performance/debug channel (can be disabled in production)
+        'performance' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/performance.log'),
+            'level' => 'debug',
+            'days' => 3,
         ],
 
         'slack' => [
