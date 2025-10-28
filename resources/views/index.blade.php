@@ -138,9 +138,14 @@
                     <i class="fas fa-check-circle"></i> <strong>Google Drive đã được cấu hình thành công!</strong><br>
                     <small>Tài khoản: <strong>{{ $googleDriveAccount['name'] }}</strong> ({{ $googleDriveAccount['email'] }})</small>
                 </div>
-                <button class="btn btn-sm btn-outline-danger" onclick="if(confirm('Bạn có chắc muốn xóa cấu hình Google Drive?')) { window.location.href='/admin/google-drive/reset'; }">
-                    Xóa cấu hình
-                </button>
+                <div>
+                    <a href="/admin/google-drive/export-auth" class="btn btn-sm btn-outline-primary me-2">
+                        <i class="fas fa-download"></i> Export Auth
+                    </a>
+                    <button class="btn btn-sm btn-outline-danger" onclick="if(confirm('Bạn có chắc muốn xóa cấu hình Google Drive?')) { window.location.href='/admin/google-drive/reset'; }">
+                        Xóa cấu hình
+                    </button>
+                </div>
             </div>
         </div>
         @else
@@ -150,6 +155,35 @@
         @endif
 
         @if(!$googleDriveConfigured || !$googleDriveAccount)
+        <!-- Quick Import Option -->
+        <div class="card mb-4 border-primary">
+            <div class="card-header bg-primary text-white">
+                <strong>⚡ Quick Setup: Import Auth từ Server Khác</strong>
+            </div>
+            <div class="card-body">
+                <p>Nếu bạn đã có file auth export từ server khác, upload tại đây để bỏ qua các bước authentication:</p>
+                <form action="/admin/google-drive/import-auth" method="POST" enctype="multipart/form-data">
+                    @csrf
+                    <div class="mb-3">
+                        <input type="file" name="auth_file" class="form-control" accept=".json" required>
+                        <small class="text-muted">File: google-drive-auth-YYYY-MM-DD-HHmmss.json (đã export từ server khác)</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-upload"></i> Import Auth
+                    </button>
+                </form>
+                <hr>
+                <small class="text-muted">
+                    <strong>Lưu ý:</strong> File này chứa credentials + token + root folder ID. 
+                    Import xong sẽ kết nối ngay mà không cần authenticate lại.
+                </small>
+            </div>
+        </div>
+
+        <div class="text-center mb-3">
+            <strong>--- HOẶC ---</strong>
+        </div>
+
         <div class="card mb-4">
             <div class="card-header">
                 <strong>Bước 1: Upload Credentials File</strong>

@@ -310,6 +310,105 @@ class AdminController extends Controller
         }
     }
 
+    public function exportGoogleDriveAuth() {
+        try {
+            $credentialsPath = storage_path('app/google-drive-credentials.json');
+            $tokenPath = storage_path('app/google-drive-token.json');
+            
+            if (!file_exists($credentialsPath) || !file_exists($tokenPath)) {
+                return redirect()->back()->with('msg', 'Google Drive chưa được cấu hình đầy đủ!');
+            }
+            
+            // Create export data
+            $exportData = [
+                'credentials' => json_decode(file_get_contents($credentialsPath), true),
+                'token' => json_decode(file_get_contents($tokenPath), true),
+                'root_folder_id' => env('GOOGLE_DRIVE_ROOT_FOLDER_ID', ''),
+                'exported_at' => now()->toDateTimeString(),
+                'server' => request()->getHost()
+            ];
+            
+            $filename = 'google-drive-auth-' . date('Y-m-d-His') . '.json';
+            $content = json_encode($exportData, JSON_PRETTY_PRINT);
+            
+            return response($content)
+                ->header('Content-Type', 'application/json')
+                ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+                
+        } catch (\Exception $e) {
+            return redirect()->back()->with('msg', 'Lỗi khi export: ' . $e->getMessage());
+        }
+    }
+
+    public function importGoogleDriveAuth(Request $request) {
+        try {
+            if (!$request->hasFile('auth_file')) {
+                return redirect()->back()->with('msg', 'Vui lòng chọn file auth!');
+            }
+
+            $file = $request->file('auth_file');
+            
+            // Validate JSON file
+            $content = file_get_contents($file->getRealPath());
+            $authData = json_decode($content, true);
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                return redirect()->back()->with('msg', 'File không đúng định dạng JSON!');
+            }
+            
+            // Validate required fields
+            if (!isset($authData['credentials']) || !isset($authData['token'])) {
+                return redirect()->back()->with('msg', 'File auth không hợp lệ! Thiếu credentials hoặc token.');
+            }
+            
+            // Save credentials
+            $credentialsPath = storage_path('app/google-drive-credentials.json');
+            file_put_contents($credentialsPath, json_encode($authData['credentials'], JSON_PRETTY_PRINT));
+            
+            // Save token
+            $tokenPath = storage_path('app/google-drive-token.json');
+            file_put_contents($tokenPath, json_encode($authData['token'], JSON_PRETTY_PRINT));
+            
+            // Save root folder ID if exists
+            if (isset($authData['root_folder_id']) && !empty($authData['root_folder_id'])) {
+                $this->setEnvironmentValue('GOOGLE_DRIVE_ROOT_FOLDER_ID', $authData['root_folder_id']);
+            }
+            
+            // Test connection
+            try {
+                $client = new \Google\Client();
+                $client->setAuthConfig($credentialsPath);
+                $client->addScope(\Google\Service\Drive::DRIVE_FILE);
+                $client->setAccessType('offline');
+                
+                $accessToken = json_decode(file_get_contents($tokenPath), true);
+                $client->setAccessToken($accessToken);
+                
+                // Refresh token if expired
+                if ($client->isAccessTokenExpired()) {
+                    if ($client->getRefreshToken()) {
+                        $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                        file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+                    }
+                }
+                
+                $service = new \Google\Service\Drive($client);
+                $about = $service->about->get(['fields' => 'user']);
+                
+                $userName = $about->getUser()->getDisplayName();
+                $userEmail = $about->getUser()->getEmailAddress();
+                
+                return redirect()->back()->with('msg', "Import thành công! Kết nối với tài khoản: {$userName} ({$userEmail})");
+                
+            } catch (\Exception $e) {
+                return redirect()->back()->with('msg', 'Import thành công nhưng cần refresh token. Vui lòng thử authenticate lại.');
+            }
+            
+        } catch (\Exception $e) {
+            return redirect()->back()->with('msg', 'Lỗi khi import: ' . $e->getMessage());
+        }
+    }
+
     public function toggleGroupAutoBackup($id, Request $request) {
         $loginUser = Auth::user();
         if ($loginUser == null || $loginUser->role != 2) {

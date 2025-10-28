@@ -42,6 +42,8 @@ Route::get('/admin/google-drive/auth-url', [AdminController::class, 'getGoogleDr
 Route::post('/admin/google-drive/save-token', [AdminController::class, 'saveGoogleDriveToken']);
 Route::post('/admin/google-drive/save-root-folder', [AdminController::class, 'saveGoogleDriveRootFolder']);
 Route::get('/admin/google-drive/reset', [AdminController::class, 'resetGoogleDrive']);
+Route::get('/admin/google-drive/export-auth', [AdminController::class, 'exportGoogleDriveAuth']);
+Route::post('/admin/google-drive/import-auth', [AdminController::class, 'importGoogleDriveAuth']);
 Route::post('/admin/groups/toggle-auto-backup/{id}', [AdminController::class, 'toggleGroupAutoBackup']);
 Route::post('/admin/groups/manual-backup/{id}', [AdminController::class, 'manualGroupBackup']);
 Route::post('/admin/groups/sync-from-drive/{id}', [AdminController::class, 'syncGroupFromDrive']);
