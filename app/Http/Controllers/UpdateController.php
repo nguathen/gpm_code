@@ -18,8 +18,10 @@ class UpdateController extends Controller
      */
     public function updateFromRemoteZip(Request $request)
     {
-        // URL của file ZIP cần tải
-        $zipUrl = 'https://github.com/ngochoaitn/gpm-login-private-server/releases/download/latest/latest-update.zip';
+        // URL của file ZIP cần tải từ GitHub repository của bạn
+        // Format: https://github.com/YOUR_USERNAME/YOUR_REPO/releases/download/latest/latest-update.zip
+        // TODO: Thay YOUR_USERNAME và YOUR_REPO bằng thông tin thực tế
+        $zipUrl = env('UPDATE_URL', 'https://github.com/YOUR_USERNAME/YOUR_REPO/releases/download/latest/latest-update.zip');
 
         // Tạo một tên file tạm thời để lưu file ZIP
         $zipFileName = 'update.zip';
