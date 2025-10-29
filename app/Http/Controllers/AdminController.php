@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use App\Models\User;
 use App\Models\Profile;
 use App\Models\Setting;
@@ -319,13 +320,45 @@ class AdminController extends Controller
                 return redirect()->back()->with('msg', 'Google Drive chưa được cấu hình đầy đủ!');
             }
             
+            // Read token and validate refresh_token exists
+            $token = json_decode(file_get_contents($tokenPath), true);
+            
+            if (!isset($token['refresh_token']) || empty($token['refresh_token'])) {
+                return redirect()->back()->with('msg', '❌ Token không có refresh_token! Vui lòng authenticate lại với prompt "select_account consent" để có refresh_token mới.');
+            }
+            
+            // Verify token is still valid by refreshing it
+            try {
+                $client = new \Google\Client();
+                $client->setAuthConfig($credentialsPath);
+                $client->addScope(\Google\Service\Drive::DRIVE_FILE);
+                $client->setAccessType('offline');
+                $client->setAccessToken($token);
+                
+                // Force refresh to ensure token works
+                if ($client->getRefreshToken()) {
+                    $newToken = $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                    
+                    if (isset($newToken['error'])) {
+                        return redirect()->back()->with('msg', '❌ Token không hợp lệ: ' . ($newToken['error_description'] ?? $newToken['error']));
+                    }
+                    
+                    // Update token file with refreshed token
+                    file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+                    $token = $client->getAccessToken();
+                }
+            } catch (\Exception $e) {
+                return redirect()->back()->with('msg', '❌ Không thể verify token: ' . $e->getMessage());
+            }
+            
             // Create export data
             $exportData = [
                 'credentials' => json_decode(file_get_contents($credentialsPath), true),
-                'token' => json_decode(file_get_contents($tokenPath), true),
+                'token' => $token,
                 'root_folder_id' => env('GOOGLE_DRIVE_ROOT_FOLDER_ID', ''),
                 'exported_at' => now()->toDateTimeString(),
-                'server' => request()->getHost()
+                'server' => request()->getHost(),
+                'version' => '1.0'
             ];
             
             $filename = 'google-drive-auth-' . date('Y-m-d-His') . '.json';
@@ -361,6 +394,11 @@ class AdminController extends Controller
                 return redirect()->back()->with('msg', 'File auth không hợp lệ! Thiếu credentials hoặc token.');
             }
             
+            // Validate refresh_token exists
+            if (!isset($authData['token']['refresh_token']) || empty($authData['token']['refresh_token'])) {
+                return redirect()->back()->with('msg', '❌ File auth không có refresh_token! Token này không thể sử dụng lâu dài. Vui lòng export lại từ server gốc.');
+            }
+            
             // Save credentials
             $credentialsPath = storage_path('app/google-drive-credentials.json');
             file_put_contents($credentialsPath, json_encode($authData['credentials'], JSON_PRETTY_PRINT));
@@ -374,7 +412,7 @@ class AdminController extends Controller
                 $this->setEnvironmentValue('GOOGLE_DRIVE_ROOT_FOLDER_ID', $authData['root_folder_id']);
             }
             
-            // Test connection
+            // Test connection and auto-refresh token
             try {
                 $client = new \Google\Client();
                 $client->setAuthConfig($credentialsPath);
@@ -384,24 +422,49 @@ class AdminController extends Controller
                 $accessToken = json_decode(file_get_contents($tokenPath), true);
                 $client->setAccessToken($accessToken);
                 
-                // Refresh token if expired
+                // Check if token expired and refresh
                 if ($client->isAccessTokenExpired()) {
                     if ($client->getRefreshToken()) {
-                        $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                        // Refresh token
+                        $newAccessToken = $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                        
+                        // Check for errors in refresh
+                        if (isset($newAccessToken['error'])) {
+                            throw new \Exception('Không thể refresh token: ' . ($newAccessToken['error_description'] ?? $newAccessToken['error']));
+                        }
+                        
+                        // Save new token
                         file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+                        Log::info('Google Drive token refreshed successfully after import');
+                    } else {
+                        throw new \Exception('Không có refresh token. Token có thể đã bị revoke.');
                     }
                 }
                 
+                // Test connection
                 $service = new \Google\Service\Drive($client);
-                $about = $service->about->get(['fields' => 'user']);
+                $about = $service->about->get(['fields' => 'user,storageQuota']);
                 
                 $userName = $about->getUser()->getDisplayName();
                 $userEmail = $about->getUser()->getEmailAddress();
                 
-                return redirect()->back()->with('msg', "Import thành công! Kết nối với tài khoản: {$userName} ({$userEmail})");
+                // Get storage info
+                $storageQuota = $about->getStorageQuota();
+                $usedGB = round($storageQuota->getUsage() / 1024 / 1024 / 1024, 2);
+                $limitGB = round($storageQuota->getLimit() / 1024 / 1024 / 1024, 2);
+                
+                return redirect()->back()->with('msg', "✅ Import thành công! Kết nối với: {$userName} ({$userEmail}). Storage: {$usedGB}/{$limitGB} GB");
+                
+            } catch (\Google\Service\Exception $e) {
+                // Google API error
+                $errorMsg = $e->getMessage();
+                if (strpos($errorMsg, 'invalid_grant') !== false) {
+                    return redirect()->back()->with('msg', '❌ Token đã bị revoke hoặc hết hạn. Vui lòng authenticate lại từ đầu.');
+                }
+                return redirect()->back()->with('msg', '❌ Lỗi Google API: ' . $errorMsg);
                 
             } catch (\Exception $e) {
-                return redirect()->back()->with('msg', 'Import thành công nhưng cần refresh token. Vui lòng thử authenticate lại.');
+                return redirect()->back()->with('msg', '❌ Lỗi khi test connection: ' . $e->getMessage());
             }
             
         } catch (\Exception $e) {
