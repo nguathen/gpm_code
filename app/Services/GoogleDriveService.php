@@ -33,6 +33,10 @@ class GoogleDriveService
         $this->client->setAccessType('offline');
         $this->client->setPrompt('consent'); // Force to get refresh token
         
+        // Disable SSL verification for development (if certificate issue)
+        $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+        $this->client->setHttpClient($httpClient);
+        
         // Load token if exists
         $tokenPath = storage_path('app/google-drive-token.json');
         if (file_exists($tokenPath)) {

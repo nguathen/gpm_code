@@ -73,6 +73,10 @@ class AdminController extends Controller
                 $client->addScope(\Google\Service\Drive::DRIVE_FILE);
                 $client->setAccessType('offline');
                 
+                // Disable SSL verification for development (if certificate issue)
+                $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+                $client->setHttpClient($httpClient);
+                
                 $tokenPath = storage_path('app/google-drive-token.json');
                 $accessToken = json_decode(file_get_contents($tokenPath), true);
                 $client->setAccessToken($accessToken);
@@ -246,6 +250,10 @@ class AdminController extends Controller
             $client->setAuthConfig($credentialsPath);
             $client->addScope(\Google\Service\Drive::DRIVE_FILE);
             $client->setAccessType('offline');
+            
+            // Disable SSL verification for development (if certificate issue)
+            $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+            $client->setHttpClient($httpClient);
 
             // Exchange authorization code for access token
             $accessToken = $client->fetchAccessTokenWithAuthCode($authCode);
@@ -333,6 +341,11 @@ class AdminController extends Controller
                 $client->setAuthConfig($credentialsPath);
                 $client->addScope(\Google\Service\Drive::DRIVE_FILE);
                 $client->setAccessType('offline');
+                
+                // Disable SSL verification for development (if certificate issue)
+                $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+                $client->setHttpClient($httpClient);
+                
                 $client->setAccessToken($token);
                 
                 // Force refresh to ensure token works
@@ -418,6 +431,10 @@ class AdminController extends Controller
                 $client->setAuthConfig($credentialsPath);
                 $client->addScope(\Google\Service\Drive::DRIVE_FILE);
                 $client->setAccessType('offline');
+                
+                // Disable SSL verification for development (if certificate issue)
+                $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+                $client->setHttpClient($httpClient);
                 
                 $accessToken = json_decode(file_get_contents($tokenPath), true);
                 $client->setAccessToken($accessToken);
