@@ -30,6 +30,8 @@ jobs:
           rsync -av \
             --exclude='.git' \
             --exclude='.github' \
+            --exclude='vendor' \
+            --exclude='vendor/' \
             --exclude='node_modules' \
             --exclude='.env' \
             --exclude='storage/logs/*' \
@@ -41,7 +43,7 @@ jobs:
             --exclude='*.zip' \
             --exclude='extract-vendor.sh' \
             --exclude='CPANEL_SETUP.md' \
-            ./ release-temp/
+            ./ release-temp/ || true
           
           # Create storage structure (empty folders)
           mkdir -p release-temp/storage/app/public
@@ -53,7 +55,7 @@ jobs:
           
           # Create latest-update.zip
           cd release-temp
-          zip -r ../latest-update.zip . -x "*.git*"
+          zip -r ../latest-update.zip . -x "*.git*" -x "vendor/*"
           cd ..
           
           # Get file size
