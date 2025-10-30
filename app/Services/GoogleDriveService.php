@@ -567,6 +567,20 @@ class GoogleDriveService
     }
 
     /**
+     * Download file from Google Drive with MD5 verification
+     *
+     * @param string $fileId Google Drive file ID
+     * @param string $destinationPath Local destination path
+     * @param string|null $expectedMd5 Expected MD5 checksum (optional)
+     * @param int $maxRetries Maximum retry attempts
+     * @return bool True on success, false on failure
+     */
+    public function downloadFileWithVerification($fileId, $destinationPath, $expectedMd5 = null, $maxRetries = 3)
+    {
+        return $this->downloadFileWithVerificationInternal($fileId, $destinationPath, $expectedMd5, $maxRetries);
+    }
+
+    /**
      * Download multiple files concurrently with integrity verification
      *
      * @param array $files Array of ['id' => fileId, 'path' => destinationPath, 'name' => fileName, 'md5' => expectedMd5]
@@ -710,7 +724,7 @@ class GoogleDriveService
             $this->log->error('Parallel download error: ' . $e->getMessage());
             // Fallback to sequential download with verification
             foreach ($files as $file) {
-                $result = $this->downloadFileWithVerification($file['id'], $file['path'], $file['md5'] ?? null);
+                $result = $this->downloadFileWithVerificationInternal($file['id'], $file['path'], $file['md5'] ?? null);
                 if ($result) {
                     $success++;
                 } else {
@@ -722,7 +736,7 @@ class GoogleDriveService
             $this->log->error('Parallel download error: ' . $e->getMessage());
             // Fallback to sequential download with verification
             foreach ($files as $file) {
-                $result = $this->downloadFileWithVerification($file['id'], $file['path'], $file['md5'] ?? null);
+                $result = $this->downloadFileWithVerificationInternal($file['id'], $file['path'], $file['md5'] ?? null);
                 if ($result) {
                     $success++;
                 } else {
@@ -740,15 +754,15 @@ class GoogleDriveService
     }
 
     /**
-     * Download a single file with full verification and retry
+     * Download file with MD5 verification (internal method)
      *
-     * @param string $fileId
-     * @param string $destinationPath
-     * @param string|null $expectedMd5
-     * @param int $maxRetries
+     * @param string $fileId Google Drive file ID
+     * @param string $destinationPath Local destination path
+     * @param string|null $expectedMd5 Expected MD5 checksum
+     * @param int $maxRetries Maximum retry attempts
      * @return bool
      */
-    protected function downloadFileWithVerification($fileId, $destinationPath, $expectedMd5 = null, $maxRetries = 3)
+    protected function downloadFileWithVerificationInternal($fileId, $destinationPath, $expectedMd5 = null, $maxRetries = 3)
     {
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
             try {

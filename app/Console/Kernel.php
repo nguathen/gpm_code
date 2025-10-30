@@ -38,6 +38,13 @@ class Kernel extends ConsoleKernel
                  ->everyMinute()
                  ->withoutOverlapping()
                  ->runInBackground();
+        
+        // Auto-sync files from Google Drive every 5 minutes
+        // This ensures Server B automatically gets updated files from Server A via shared DB
+        $schedule->command('files:sync-from-drive --limit=50')
+                 ->everyFiveMinutes()
+                 ->withoutOverlapping()
+                 ->runInBackground();
     }
 
     /**
