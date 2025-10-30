@@ -9,6 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use App\Models\Profile;
 use App\Models\Group;
+use App\Models\ProfileFile;
 use App\Services\GoogleDriveService;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
@@ -100,6 +101,7 @@ class BackupProfileToGoogleDrive implements ShouldQueue
 
         } catch (\Exception $e) {
             Log::error("Backup job failed for profile {$this->profileId}: " . $e->getMessage());
+            Log::error("Stack trace: " . $e->getTraceAsString());
             throw $e; // Re-throw to mark job as failed
         }
     }
@@ -140,10 +142,47 @@ class BackupProfileToGoogleDrive implements ShouldQueue
                 // Backup to Google Drive
                 $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
                 
-                if ($result === 'skipped') {
+                // Handle new return format (array with status and file_id)
+                if (is_array($result)) {
+                    $status = $result['status'];
+                    $fileId = $result['file_id'] ?? null;
+                    
+                    if ($status === 'skipped') {
+                        $skippedCount++;
+                        Log::debug("File unchanged, skipped: {$fileName}");
+                        
+                        // ALWAYS save file record if file_id exists (even if skipped)
+                        // This ensures file IDs are synced to DB even for existing files
+                        if ($fileId) {
+                            $this->saveFileRecord($groupId, $fileName, $fileId, $file);
+                        } else {
+                            // If file was skipped but no file_id returned, try to find it on Google Drive
+                            $foundFileId = $googleDriveService->searchFile($fileName, $folderId);
+                            if ($foundFileId) {
+                                Log::debug("Found existing file on Google Drive for {$fileName}, syncing to DB");
+                                $this->saveFileRecord($groupId, $fileName, $foundFileId, $file);
+                            }
+                        }
+                    } elseif ($status === 'uploaded' || $status === 'updated') {
+                        $backedUpCount++;
+                        Log::debug("Backed up file: {$fileName} (ID: {$fileId})");
+                        
+                        // Save file record to database
+                        if ($fileId) {
+                            $this->saveFileRecord($groupId, $fileName, $fileId, $file);
+                        }
+                    }
+                } elseif ($result === 'skipped') {
+                    // Legacy format support - try to find file ID on Google Drive
                     $skippedCount++;
                     Log::debug("File unchanged, skipped: {$fileName}");
+                    $foundFileId = $googleDriveService->searchFile($fileName, $folderId);
+                    if ($foundFileId) {
+                        Log::debug("Found existing file on Google Drive for {$fileName}, syncing to DB");
+                        $this->saveFileRecord($groupId, $fileName, $foundFileId, $file);
+                    }
                 } elseif ($result) {
+                    // Legacy format support
                     $backedUpCount++;
                     Log::debug("Backed up file: {$fileName}");
                 } else {
@@ -153,6 +192,41 @@ class BackupProfileToGoogleDrive implements ShouldQueue
         }
 
         Log::info("Profile {$profile->id} backup: {$backedUpCount} uploaded, {$skippedCount} skipped");
+    }
+
+    /**
+     * Save or update file record in database
+     *
+     * @param int $groupId
+     * @param string $fileName
+     * @param string $googleDriveFileId
+     * @param string $filePath
+     * @return void
+     */
+    protected function saveFileRecord($groupId, $fileName, $googleDriveFileId, $filePath)
+    {
+        try {
+            $localPath = storage_path('app/public/' . $filePath);
+            $fileSize = file_exists($localPath) ? filesize($localPath) : null;
+            $md5Checksum = file_exists($localPath) ? md5_file($localPath) : null;
+            
+            ProfileFile::updateOrCreate(
+                [
+                    'group_id' => $groupId,
+                    'file_name' => $fileName,
+                ],
+                [
+                    'google_drive_file_id' => $googleDriveFileId,
+                    'file_path' => $filePath,
+                    'file_size' => $fileSize,
+                    'md5_checksum' => $md5Checksum,
+                ]
+            );
+            
+            Log::debug("Saved file record: {$fileName} (Google Drive ID: {$googleDriveFileId})");
+        } catch (\Exception $e) {
+            Log::error("Failed to save file record for {$fileName}: " . $e->getMessage());
+        }
     }
 
     /**

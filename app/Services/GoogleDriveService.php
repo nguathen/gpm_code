@@ -252,6 +252,132 @@ class GoogleDriveService
     }
 
     /**
+     * Get file info from Google Drive
+     *
+     * @param string $fileId Google Drive file ID
+     * @return array|null File info with mimeType and size
+     */
+    public function getFileInfo($fileId)
+    {
+        try {
+            $this->refreshTokenIfNeeded();
+
+            $file = $this->service->files->get($fileId, [
+                'fields' => 'id,name,size,mimeType'
+            ]);
+
+            return [
+                'id' => $file->getId(),
+                'name' => $file->getName(),
+                'size' => $file->getSize(),
+                'mimeType' => $file->getMimeType(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Google Drive get file info error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Proxy download file from Google Drive
+     * Downloads file from Google Drive and streams it to client
+     *
+     * @param string $fileId Google Drive file ID
+     * @param string $fileName Original file name for Content-Disposition header
+     * @return \Illuminate\Http\Response
+     */
+    public function proxyDownload($fileId, $fileName)
+    {
+        try {
+            $this->refreshTokenIfNeeded();
+
+            // Get file info first
+            $fileInfo = $this->getFileInfo($fileId);
+            if (!$fileInfo) {
+                abort(404);
+            }
+
+            // Get access token
+            $accessToken = $this->client->getAccessToken();
+            if (!isset($accessToken['access_token'])) {
+                Log::error('Google Drive: No access token available for proxy download');
+                abort(500);
+            }
+
+            // Download file from Google Drive using Guzzle with stream
+            $client = new \GuzzleHttp\Client();
+            $response = $client->get(
+                "https://www.googleapis.com/drive/v3/files/{$fileId}?alt=media",
+                [
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $accessToken['access_token'],
+                    ],
+                    'stream' => true,
+                ]
+            );
+
+            // Stream the response to client
+            return response()->stream(function() use ($response) {
+                $body = $response->getBody();
+                while (!$body->eof()) {
+                    echo $body->read(1024 * 8); // 8KB chunks
+                    flush();
+                }
+            }, 200, [
+                'Content-Type' => $fileInfo['mimeType'] ?? 'application/octet-stream',
+                'Content-Length' => $fileInfo['size'] ?? 0,
+                'Content-Disposition' => 'attachment; filename="' . basename($fileName) . '"',
+                'Cache-Control' => 'public, max-age=3600',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Google Drive proxy download error: ' . $e->getMessage());
+            abort(500);
+        }
+    }
+
+    /**
+     * Get shareable download link for a file with access token
+     * Creates a download link with access token for immediate use
+     *
+     * @param string $fileId Google Drive file ID
+     * @return string|null Download URL with access token or null on error
+     */
+    public function getShareableDownloadLink($fileId)
+    {
+        try {
+            $this->refreshTokenIfNeeded();
+
+            // Always use access token method for immediate download
+            // This ensures the link works right away without requiring file sharing permissions
+            $accessToken = $this->client->getAccessToken();
+            
+            if (!isset($accessToken['access_token'])) {
+                Log::error('Google Drive: No access token available');
+                return null;
+            }
+            
+            return "https://www.googleapis.com/drive/v3/files/{$fileId}?alt=media&access_token={$accessToken['access_token']}";
+        } catch (\Exception $e) {
+            Log::error('Google Drive get shareable link error: ' . $e->getMessage());
+            
+            // Fallback: try to get access token again
+            try {
+                $this->refreshTokenIfNeeded();
+                $accessToken = $this->client->getAccessToken();
+                
+                if (isset($accessToken['access_token'])) {
+                    return "https://www.googleapis.com/drive/v3/files/{$fileId}?alt=media&access_token={$accessToken['access_token']}";
+                }
+            } catch (\Exception $e2) {
+                Log::error('Google Drive fallback link generation error: ' . $e2->getMessage());
+            }
+            
+            return null;
+        }
+    }
+
+    /**
      * Search for a file in a folder
      *
      * @param string $fileName
@@ -289,7 +415,7 @@ class GoogleDriveService
      * @param string $localPath
      * @param string $fileName
      * @param string $folderId
-     * @return bool|string Returns true on success, 'skipped' if unchanged, false on error
+     * @return bool|string|array Returns file ID on success, 'skipped' if unchanged, false on error
      */
     public function backupFile($localPath, $fileName, $folderId)
     {
@@ -308,9 +434,11 @@ class GoogleDriveService
             $existingFileId = $this->searchFileWithMetadata($fileName, $folderId);
 
             if ($existingFileId) {
+                $fileId = $existingFileId['id'];
+                
                 // Get existing file metadata
                 try {
-                    $existingFile = $this->service->files->get($existingFileId['id'], [
+                    $existingFile = $this->service->files->get($fileId, [
                         'fields' => 'id,name,size,md5Checksum,modifiedTime'
                     ]);
 
@@ -320,29 +448,36 @@ class GoogleDriveService
                     // Compare MD5 checksum - most reliable way
                     if ($remoteMd5 && $remoteMd5 === $localMd5) {
                         Log::debug("File unchanged, skipping: {$fileName} (MD5: {$localMd5})");
-                        return 'skipped';
+                        return ['status' => 'skipped', 'file_id' => $fileId];
                     }
 
                     // Fallback: compare size if MD5 not available
                     if (!$remoteMd5 && $remoteSize == $localSize) {
                         Log::debug("File likely unchanged (same size), skipping: {$fileName}");
-                        return 'skipped';
+                        return ['status' => 'skipped', 'file_id' => $fileId];
                     }
 
                     // File changed, update it
                     Log::debug("File changed, updating: {$fileName} (Local MD5: {$localMd5}, Remote MD5: {$remoteMd5})");
-                    return $this->updateFile($existingFileId['id'], $localPath);
+                    $updateResult = $this->updateFile($fileId, $localPath);
+                    return $updateResult ? ['status' => 'updated', 'file_id' => $fileId] : false;
 
                 } catch (\Exception $e) {
                     // If can't get metadata, update anyway to be safe
                     Log::warning("Cannot get file metadata, updating: {$fileName}");
-                    return $this->updateFile($existingFileId['id'], $localPath);
+                    $updateResult = $this->updateFile($fileId, $localPath);
+                    return $updateResult ? ['status' => 'updated', 'file_id' => $fileId] : false;
                 }
             } else {
                 // File doesn't exist, upload new
                 Log::debug("New file, uploading: {$fileName}");
                 $fileId = $this->uploadFile($localPath, $fileName, $folderId);
-                return $fileId !== null;
+                
+                if ($fileId) {
+                    return ['status' => 'uploaded', 'file_id' => $fileId];
+                }
+                
+                return false;
             }
         } catch (\Exception $e) {
             Log::error('Google Drive backup error: ' . $e->getMessage());

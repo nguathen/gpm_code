@@ -29,7 +29,6 @@ jobs:
             --exclude='.git' \
             --exclude='.github' \
             --exclude='node_modules' \
-            --exclude='vendor' \
             --exclude='.env' \
             --exclude='storage/logs/*' \
             --exclude='storage/framework/cache/*' \
@@ -38,7 +37,6 @@ jobs:
             --exclude='public/storage' \
             --exclude='*.tar.gz' \
             --exclude='*.zip' \
-            --exclude='vendor.tar.gz' \
             --exclude='extract-vendor.sh' \
             --exclude='CPANEL_SETUP.md' \
             ./ release-temp/

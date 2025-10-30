@@ -1,10 +1,14 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Http\Request;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\UpdateController;
+use App\Models\ProfileFile;
+use App\Services\GoogleDriveService;
 
 /*
 |--------------------------------------------------------------------------
@@ -62,7 +66,7 @@ Route::middleware(['auth:sanctum'])->group(function(){
 });
 
 // Route to serve profile files from group folders with backward compatibility
-Route::get('/storage/profiles/{filename}', function($filename) {
+Route::match(['GET', 'HEAD'], '/storage/profiles/{filename}', function($filename, Request $request) {
     // Try to find file in group folders
     $publicPath = storage_path('app/public/profiles');
     
@@ -72,6 +76,12 @@ Route::get('/storage/profiles/{filename}', function($filename) {
     foreach ($groupFolders as $folder) {
         $filePath = $folder . '/' . $filename;
         if (file_exists($filePath)) {
+            if ($request->isMethod('HEAD')) {
+                // HEAD request: return headers only
+                return response('', 200)
+                    ->header('Content-Type', mime_content_type($filePath))
+                    ->header('Content-Length', filesize($filePath));
+            }
             return response()->file($filePath);
         }
     }
@@ -79,7 +89,39 @@ Route::get('/storage/profiles/{filename}', function($filename) {
     // Fallback: try old location (root profiles folder) for backward compatibility
     $oldPath = $publicPath . '/' . $filename;
     if (file_exists($oldPath)) {
+        if ($request->isMethod('HEAD')) {
+            return response('', 200)
+                ->header('Content-Type', mime_content_type($oldPath))
+                ->header('Content-Length', filesize($oldPath));
+        }
         return response()->file($oldPath);
+    }
+    
+    // File not found locally, proxy from Google Drive
+    try {
+        // Find file record in database
+        $profileFile = ProfileFile::where('file_name', $filename)->first();
+        
+        if ($profileFile && $profileFile->google_drive_file_id) {
+            $googleDriveService = app(GoogleDriveService::class);
+            
+            if ($googleDriveService->isConfigured()) {
+                // For HEAD request, just check if file exists and return headers
+                if ($request->isMethod('HEAD')) {
+                    $fileInfo = $googleDriveService->getFileInfo($profileFile->google_drive_file_id);
+                    if ($fileInfo) {
+                        return response('', 200)
+                            ->header('Content-Type', $fileInfo['mimeType'] ?? 'application/octet-stream')
+                            ->header('Content-Length', $fileInfo['size'] ?? 0);
+                    }
+                } else {
+                    // GET request: proxy download from Google Drive
+                    return $googleDriveService->proxyDownload($profileFile->google_drive_file_id, $filename);
+                }
+            }
+        }
+    } catch (\Exception $e) {
+        Log::error("Error getting Google Drive file for {$filename}: " . $e->getMessage());
     }
     
     abort(404);

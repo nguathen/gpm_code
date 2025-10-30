@@ -9,6 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use App\Models\Group;
 use App\Models\BackupLog;
+use App\Models\ProfileFile;
 use App\Services\GoogleDriveService;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
@@ -120,9 +121,34 @@ class ManualBackupGroupToGoogleDrive implements ShouldQueue
                 
                 $result = $googleDriveService->backupFile($localPath, $fileName, $folderId);
                 
-                if ($result === 'skipped') {
+                // Handle new return format (array with status and file_id)
+                if (is_array($result)) {
+                    $status = $result['status'];
+                    $fileId = $result['file_id'] ?? null;
+                    
+                    if ($status === 'skipped') {
+                        $skippedCount++;
+                        
+                        // Save file record if file_id exists
+                        if ($fileId) {
+                            $this->saveFileRecord($group->id, $fileName, $fileId, $file);
+                        }
+                    } elseif ($status === 'uploaded' || $status === 'updated') {
+                        $successCount++;
+                        
+                        // Save file record
+                        if ($fileId) {
+                            $this->saveFileRecord($group->id, $fileName, $fileId, $file);
+                        }
+                    } else {
+                        $failCount++;
+                        $failedFiles[] = $fileName;
+                    }
+                } elseif ($result === 'skipped') {
+                    // Legacy format support
                     $skippedCount++;
                 } elseif ($result) {
+                    // Legacy format support
                     $successCount++;
                 } else {
                     $failCount++;
@@ -149,6 +175,41 @@ class ManualBackupGroupToGoogleDrive implements ShouldQueue
                 $backupLog->markFailed($e->getMessage());
             }
             throw $e;
+        }
+    }
+
+    /**
+     * Save or update file record in database
+     *
+     * @param int $groupId
+     * @param string $fileName
+     * @param string $googleDriveFileId
+     * @param string $filePath
+     * @return void
+     */
+    protected function saveFileRecord($groupId, $fileName, $googleDriveFileId, $filePath)
+    {
+        try {
+            $localPath = storage_path('app/public/' . $filePath);
+            $fileSize = file_exists($localPath) ? filesize($localPath) : null;
+            $md5Checksum = file_exists($localPath) ? md5_file($localPath) : null;
+            
+            ProfileFile::updateOrCreate(
+                [
+                    'group_id' => $groupId,
+                    'file_name' => $fileName,
+                ],
+                [
+                    'google_drive_file_id' => $googleDriveFileId,
+                    'file_path' => $filePath,
+                    'file_size' => $fileSize,
+                    'md5_checksum' => $md5Checksum,
+                ]
+            );
+            
+            Log::debug("Saved file record: {$fileName} (Google Drive ID: {$googleDriveFileId})");
+        } catch (\Exception $e) {
+            Log::error("Failed to save file record for {$fileName}: " . $e->getMessage());
         }
     }
 

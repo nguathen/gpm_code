@@ -32,6 +32,12 @@ class Kernel extends ConsoleKernel
         $schedule->command('googledrive:cleanup-temp --minutes=60')
                  ->everySixHours()
                  ->runInBackground();
+        
+        // Ensure queue worker is running every minute
+        $schedule->exec(base_path('scripts/ensure-queue-worker.sh'))
+                 ->everyMinute()
+                 ->withoutOverlapping()
+                 ->runInBackground();
     }
 
     /**
