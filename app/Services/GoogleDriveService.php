@@ -305,7 +305,7 @@ class GoogleDriveService
             }
 
             // Download file from Google Drive using Guzzle with stream
-            $client = new \GuzzleHttp\Client();
+            $client = new \GuzzleHttp\Client(['verify' => false]);
             $response = $client->get(
                 "https://www.googleapis.com/drive/v3/files/{$fileId}?alt=media",
                 [
@@ -597,7 +597,7 @@ class GoogleDriveService
             $this->refreshTokenIfNeeded();
             $this->throttleRequest(); // Rate limiting
             
-            $client = new \GuzzleHttp\Client();
+            $client = new \GuzzleHttp\Client(['verify' => false]);
             $promises = [];
             
             // Create promises for each file download
