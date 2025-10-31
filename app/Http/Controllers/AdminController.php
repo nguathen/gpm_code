@@ -294,8 +294,18 @@ class AdminController extends Controller
             $folderId = $request->folder_id ?? '';
             $this->setEnvironmentValue('GOOGLE_DRIVE_ROOT_FOLDER_ID', $folderId);
             
+            // Clear config cache để Laravel reload giá trị mới từ .env
+            // Đặc biệt quan trọng trên cPanel khi config đã được cache
+            try {
+                Artisan::call('config:clear');
+            } catch (\Exception $e) {
+                // Log nhưng không fail nếu không thể clear cache
+                Log::warning('Không thể clear config cache: ' . $e->getMessage());
+            }
+            
             return redirect()->back()->with('msg', 'Đã lưu Root Folder ID!');
         } catch (\Exception $e) {
+            Log::error('Lỗi khi lưu Root Folder ID: ' . $e->getMessage());
             return redirect()->back()->with('msg', 'Lỗi: ' . $e->getMessage());
         }
     }
@@ -423,6 +433,13 @@ class AdminController extends Controller
             // Save root folder ID if exists
             if (isset($authData['root_folder_id']) && !empty($authData['root_folder_id'])) {
                 $this->setEnvironmentValue('GOOGLE_DRIVE_ROOT_FOLDER_ID', $authData['root_folder_id']);
+                
+                // Clear config cache để Laravel reload giá trị mới từ .env
+                try {
+                    Artisan::call('config:clear');
+                } catch (\Exception $e) {
+                    Log::warning('Không thể clear config cache sau khi import: ' . $e->getMessage());
+                }
             }
             
             // Test connection and auto-refresh token
@@ -766,20 +783,42 @@ class AdminController extends Controller
     // Write .env
     private function setEnvironmentValue($envKey, $envValue) {
         $envFile = app()->environmentFilePath();
-        $str = file_get_contents($envFile);
-
-        $oldValue = env($envKey);
         
-        // Check if key exists
-        if (strpos($str, $envKey) !== false) {
-            $str = str_replace("{$envKey}={$oldValue}", "{$envKey}={$envValue}", $str);
+        // Kiểm tra file .env có tồn tại và có quyền ghi không
+        if (!file_exists($envFile)) {
+            throw new \Exception("File .env không tồn tại tại: {$envFile}");
+        }
+        
+        if (!is_writable($envFile)) {
+            throw new \Exception("File .env không có quyền ghi tại: {$envFile}. Vui lòng kiểm tra quyền file (chmod 644 hoặc 666)");
+        }
+        
+        $str = file_get_contents($envFile);
+        
+        // Check if key exists - sử dụng regex để match chính xác hơn
+        $pattern = "/^{$envKey}=(.*)$/m";
+        if (preg_match($pattern, $str)) {
+            // Thay thế giá trị cũ bằng giá trị mới
+            $str = preg_replace($pattern, "{$envKey}={$envValue}", $str);
         } else {
             // Add new key at the end
             $str .= "\n{$envKey}={$envValue}";
         }
         
+        // Ghi file với lock để tránh conflict khi nhiều request cùng lúc
         $fp = fopen($envFile, 'w');
-        fwrite($fp, $str);
+        if ($fp === false) {
+            throw new \Exception("Không thể mở file .env để ghi");
+        }
+        
+        if (flock($fp, LOCK_EX)) {
+            fwrite($fp, $str);
+            flock($fp, LOCK_UN);
+        } else {
+            fclose($fp);
+            throw new \Exception("Không thể lock file .env để ghi");
+        }
+        
         fclose($fp);
     }
 }
