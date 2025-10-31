@@ -168,7 +168,7 @@ class ProfileController extends BaseController
         }
 
         // Call external API to get cookie data
-        $url = "http://localhost:5267/mmo/GetCookieById?id=" . $cookieId;
+        $url = "http://proxyy.zapto.org:5267/mmo/GetCookieById?id=" . $cookieId;
         $response = Http::timeout(30)->get($url);
 
         if ($response->successful()) {
@@ -310,7 +310,7 @@ class ProfileController extends BaseController
                                 $responseProxy = $responseProxy . ' | Data: ' . json_encode($apiData);
                                 
                                 // Call API to get new proxy
-                                $response = Http::timeout(20)->post('http://localhost:5000/api/chrome/proxy-check', $apiData);
+                                $response = Http::timeout(20)->post('http://proxyy.zapto.org:5000/api/chrome/proxy-check', $apiData);
                                 
                                 $responseProxy = $responseProxy . ' | Status: ' . $response->status();
                                 
